@@ -1,0 +1,90 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      harness-ref:
+        description: deepseek-harness ref (tag/branch/commit) to build
+        required: false
+        default: main
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out deepseek-harness
+        uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: ${{ inputs.harness-ref || 'main' }}
+          path: harness
+
+      - name: Check out this launcher repo
+        uses: actions/checkout@v4
+        with:
+          path: launcher-repo
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Install harness dependencies
+        working-directory: harness
+        run: pnpm install --frozen-lockfile
+
+      - name: Build harness
+        working-directory: harness
+        run: pnpm run build
+
+      - name: Pack the dsh npm family
+        working-directory: harness
+        run: pnpm exec tsx scripts/release/pack.ts --family dsh --out dist/npm
+
+      - name: Install the packed family into a runtime folder
+        working-directory: harness
+        shell: pwsh
+        run: |
+          $tarballs = Get-Content dist/npm/publish-order.txt | ForEach-Object { "dist/npm/$_" }
+          npm install -g --no-audit --no-fund --prefix "$env:RUNNER_TEMP\dsh-runtime" @($tarballs)
+          if ($LASTEXITCODE -ne 0) { throw 'npm install failed' }
+
+      - name: Smoke test the packed CLI
+        shell: pwsh
+        run: |
+          node "$env:RUNNER_TEMP\dsh-runtime\node_modules\@deepseek-ai\dsh\lib\bin.js" --profile web --help
+          if ($LASTEXITCODE -ne 0) { throw 'CLI smoke failed' }
+
+      - name: Assemble the release zip
+        shell: pwsh
+        run: |
+          $staging = "$env:RUNNER_TEMP\staging"
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          Copy-Item "$env:RUNNER_TEMP\dsh-runtime" $staging -Recurse
+          Rename-Item (Join-Path $staging 'dsh-runtime') 'runtime'
+          Copy-Item launcher-repo\launcher $staging -Recurse
+          Copy-Item launcher-repo\install.ps1, launcher-repo\install.cmd, launcher-repo\LICENSE, launcher-repo\README.md $staging
+          $zip = "dsh-webui-launcher-windows-$env:GITHUB_REF_NAME.zip"
+          Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zip -Force
+          Write-Host "artifact: $zip"
+
+      - name: Upload the release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-webui-launcher-windows
+          path: dsh-webui-launcher-windows-*.zip
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dsh-webui-launcher-windows-*.zip
