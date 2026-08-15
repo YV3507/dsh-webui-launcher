@@ -1,5 +1,7 @@
 # DeepSeek Harness Web UI — Windows quick launch
 
+English | [中文](README.zh.md)
+
 A double-click launcher for the DeepSeek Harness Web UI on Windows. It starts `dsh --profile web` silently in the background, opens the system default browser on the Web UI, and stops the harness it started once every browser that opened the Web UI is closed. The [Agent Note](../../.agents/notes/implemented/process/2026-08-15-windows-quick-launch.md) records the design.
 
 ## What is here

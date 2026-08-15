@@ -1,5 +1,7 @@
 # DeepSeek Harness Web UI — Windows 快捷启动
 
+[English](README.md) | 中文
+
 面向 Windows 的 DeepSeek Harness Web UI 双击启动器。它静默地在后台启动 `dsh --profile web`，用系统默认浏览器打开 Web UI，并在所有打开过 Web UI 的浏览器关闭后停止由它启动的 harness。[Agent Note](../../.agents/notes/implemented/process/2026-08-15-windows-quick-launch.zh.md) 记录了设计决策。
 
 ## 目录内容
