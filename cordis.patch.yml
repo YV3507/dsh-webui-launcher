@@ -1,0 +1,6 @@
+# dsh-webui-launcher bundle patch: inserts the Web UI controller plugin row.
+# Applied when a profile lists this bundle; the row references the package by
+# name so Node resolution finds the installed code.
+- insert:
+    - id: dsh-webui-launcher
+      name: 'dsh-webui-launcher'
