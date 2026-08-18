@@ -28,15 +28,15 @@ powershell -ExecutionPolicy Bypass -File scripts\windows\install-shortcut.ps1 -S
 
 ## 工作原理
 
-看门狗启动与 `pnpm dsh --profile web` 相同的命令（`node apps/cli/lib/bin.js`，没有构建产物时退化为 tsx 源码启动器），等待端口应答 HTTP，然后在默认浏览器中打开 `http://127.0.0.1:<port>`，此后每两秒轮询一次。
+看门狗启动与 `pnpm dsh --profile web` 相同的命令（`node apps/cli/lib/bin.js`，没有构建产物时退化为 tsx 源码启动器），等待端口应答 HTTP，然后在默认浏览器中打开 `http://127.0.0.1:<port>`，此后每两秒轮询一次。启动慢不算失败：只要服务器进程仍存活，看门狗就周期性警告并继续等待，仅在进程退出且无兄弟接管端口时才判定失败。
 
-只要有一个浏览器与 Web UI 端口保持已建立的 TCP 连接，harness 就保持运行；页面在标签页打开期间会维持其 `/api/events.mux` WebSocket。当所有此类连接在宽限期内（默认 6 秒）消失时，看门狗用 `taskkill /T /F` 停止 harness 进程树并退出。
+只要有一个浏览器与 Web UI 端口保持已建立的 TCP 连接，harness 就保持运行；页面在标签页打开期间会维持其 `/api/events.mux` WebSocket。在浏览器首次连接之前，使用更长的宽限（默认 60 秒，`-FirstConnectGraceSeconds`），避免把慢速页面加载误判为浏览器已关闭；首次连接之后按正常宽限检测关闭。当所有此类连接在宽限期内（默认 6 秒，`-ShutdownGraceSeconds`）消失时，看门狗用 `taskkill /T /F` 停止 harness 进程树并退出。
 
 端口上已有服务器时采用"接管"模式：不重启、也绝不停止；看门狗只关闭它自己启动的 harness，因此不会误杀以其他方式启动的服务器。两个几乎同时的启动会共享一台服务器：落败实例的 harness 因端口被占而退出，其看门狗改为接管胜出实例而不是报错。被接管的服务器消失属于正常观察结束，静默退出。
 
 ## 配置
 
-默认值以参数形式位于 `dsh-webui.ps1` 顶部：`-Port`（3080）、`-HostAddress`（127.0.0.1）、`-ShRoot`（dsh 根目录；默认从脚本位置或 `dsh-webui.json` 配置文件推导）、`-Launch`（`auto` 优先内置 CLI，否则用 tsx 源码启动）、`-StartupTimeoutSeconds`（120）、`-BrowserObservationSeconds`（30）、`-ShutdownGraceSeconds`（6）、`-LogDir`（脚本旁的 `logs` 目录）、`-DshHome`（继承环境中的 `DSH_HOME`）。一次性运行可通过快捷方式或控制台传入；永久修改请直接编辑文件中的默认值。无效的 `-Port`（超出 1..65535）或 `-HostAddress`（不是主机名/IP 字面量，或为 `0.0.0.0`）会在启动任何东西之前快速失败。`-SelfTest` 打印诊断信息后退出；`-NoBrowser` 只监视不打开浏览器；`-AdoptOnly` 只监视已有服务器，既不启动也不停止。
+默认值以参数形式位于 `dsh-webui.ps1` 顶部：`-Port`（3080）、`-HostAddress`（127.0.0.1）、`-ShRoot`（dsh 根目录；默认从脚本位置或 `dsh-webui.json` 配置文件推导）、`-Launch`（`auto` 优先内置 CLI，否则用 tsx 源码启动）、`-StartupTimeoutSeconds`（120；每次"启动缓慢"警告的间隔——看门狗绝不杀死仍存活的服务器）、`-FirstConnectGraceSeconds`（60；浏览器尚未连接时的容忍时长）、`-BrowserObservationSeconds`（30）、`-ShutdownGraceSeconds`（6）、`-LogDir`（脚本旁的 `logs` 目录）、`-DshHome`（继承环境中的 `DSH_HOME`）。一次性运行可通过快捷方式或控制台传入；永久修改请直接编辑文件中的默认值。无效的 `-Port`（超出 1..65535）或 `-HostAddress`（不是主机名/IP 字面量，或为 `0.0.0.0`）会在启动任何东西之前快速失败。`-SelfTest` 打印诊断信息后退出；`-NoBrowser` 只监视不打开浏览器；`-AdoptOnly` 只监视已有服务器，既不启动也不停止。
 
 ## 安全性
 

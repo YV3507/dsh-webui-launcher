@@ -45,8 +45,16 @@
   With AdoptOnly and no listener on the port, the script fails with exit 1.
 
 .PARAMETER StartupTimeoutSeconds
-  How long to wait for the server to listen and answer HTTP before failing.
-  Defaults to 120.
+  How long the watchdog waits before logging a startup warning. A slow boot is
+  not a failure: while the server process stays alive the watchdog keeps
+  waiting (warning again every interval) and only fails when the process
+  exits. Defaults to 120.
+
+.PARAMETER FirstConnectGraceSeconds
+  How long after the browser opens, with no browser connection ever observed,
+  before the harness is stopped. Covers a slow machine where the page is still
+  loading; once a browser has connected, the normal -ShutdownGraceSeconds
+  applies. Defaults to 60.
 
 .PARAMETER BrowserObservationSeconds
   How long after opening the browser the watchdog keeps the harness alive no
@@ -90,6 +98,7 @@ param(
   [switch]$NoBrowser,
   [switch]$AdoptOnly,
   [int]$StartupTimeoutSeconds = 120,
+  [int]$FirstConnectGraceSeconds = 60,
   [int]$BrowserObservationSeconds = 30,
   [int]$ShutdownGraceSeconds = 6,
   [int]$SiblingStartupGraceSeconds = 15,
@@ -393,10 +402,16 @@ if (Test-PortListening -Addr $HostAddress -Port $Port) {
 }
 
 # ---- wait for readiness
+# A slow boot is not a failure: while the server process stays alive the
+# watchdog keeps waiting and warns every StartupTimeoutSeconds, so a machine
+# that takes minutes to boot dsh is never mis-killed. Failure is the process
+# exiting (with no sibling taking over the port).
 $ready = $false
-$deadline = (Get-Date).AddSeconds($StartupTimeoutSeconds)
+$startupFailure = ''
+$startupStart = Get-Date
+$warnAt = $startupStart.AddSeconds($StartupTimeoutSeconds)
 $serverDeadAt = $null
-while ((Get-Date) -lt $deadline) {
+while ($true) {
   if ($started) {
     if (Get-Process -Id $serverPid -ErrorAction SilentlyContinue) {
       $serverDeadAt = $null
@@ -413,26 +428,36 @@ while ((Get-Date) -lt $deadline) {
         $started = $false
         $serverPid = $null
       } elseif ((Get-Date) -gt $serverDeadAt.AddSeconds($SiblingStartupGraceSeconds)) {
+        $startupFailure = "harness process $serverPid exited and no sibling took over the port"
         break
       }
     }
   }
-  if (Test-PortListening -Addr $HostAddress -Port $Port) {
+  $listening = Test-PortListening -Addr $HostAddress -Port $Port
+  if ($listening) {
     try {
       $response = Invoke-WebRequest -UseBasicParsing -Uri "$webUrl/" -TimeoutSec 3 -ErrorAction Stop
       if ($response.StatusCode -eq 200) { $ready = $true; break }
     } catch {
-      # not ready yet; keep polling
+      # listening but not answering yet; keep polling
     }
+  }
+  $now = Get-Date
+  if ($now -ge $warnAt) {
+    $elapsed = [int]($now - $startupStart).TotalSeconds
+    $outTail = if (Test-Path $serverOutLog) { (Get-Content -Path $serverOutLog -Tail 3 -ErrorAction SilentlyContinue) -join ' | ' } else { '' }
+    $errTail = if (Test-Path $serverErrLog) { (Get-Content -Path $serverErrLog -Tail 3 -ErrorAction SilentlyContinue) -join ' | ' } else { '' }
+    $state = if ($listening) { 'port listening, waiting for HTTP 200' } else { 'still starting' }
+    Write-Log "startup slow (${elapsed}s, $state); stdout: $outTail; stderr: $errTail" 'warn'
+    $warnAt = $now.AddSeconds($StartupTimeoutSeconds)
   }
   Start-Sleep -Milliseconds 500
 }
 if (-not $ready) {
-  $tail = ''
-  if (Test-Path $serverErrLog) {
-    $tail = (Get-Content -Path $serverErrLog -Tail 10 -ErrorAction SilentlyContinue) -join ' | '
-  }
-  Write-Log "server did not become ready within ${StartupTimeoutSeconds}s; stderr tail: $tail" 'error'
+  $elapsed = [int]((Get-Date) - $startupStart).TotalSeconds
+  $outTail = if (Test-Path $serverOutLog) { (Get-Content -Path $serverOutLog -Tail 5 -ErrorAction SilentlyContinue) -join ' | ' } else { '' }
+  $errTail = if (Test-Path $serverErrLog) { (Get-Content -Path $serverErrLog -Tail 5 -ErrorAction SilentlyContinue) -join ' | ' } else { '' }
+  Write-Log "server did not become ready ($startupFailure; ${elapsed}s elapsed); stdout tail: $outTail; stderr tail: $errTail" 'error'
   if ($started -and (Get-Process -Id $serverPid -ErrorAction SilentlyContinue)) {
     $null = Stop-ServerTree -ProcessId $serverPid -ExpectedStartTime $serverStartTime
   }
@@ -457,6 +482,7 @@ $graceChecks = [int]($ShutdownGraceSeconds / $pollIntervalSeconds)
 if ($graceChecks -lt 1) { $graceChecks = 1 }
 $misses = 0
 $adoptedMisses = 0
+$everConnected = $false
 $shutdownReason = ''
 while ($true) {
   Start-Sleep -Seconds $pollIntervalSeconds
@@ -492,12 +518,21 @@ while ($true) {
   }
   if ((Get-Date) -lt $observationEnd) { continue }
   if (Test-BrowserConnected -Addr $HostAddress -Port $Port) {
+    $everConnected = $true
     $misses = 0
     continue
   }
   $misses++
-  if ($misses -ge $graceChecks) {
-    $shutdownReason = "no browser connected to $webUrl for ${ShutdownGraceSeconds}s"
+  # Until a browser has connected at least once, the page may still be loading
+  # on a slow machine; grant that phase a longer grace. After the first
+  # connection, the normal grace applies and the close is detected quickly.
+  $connectGraceChecks = if ($everConnected) { $graceChecks } else { [int]($FirstConnectGraceSeconds / $pollIntervalSeconds) }
+  if ($misses -ge $connectGraceChecks) {
+    $shutdownReason = if ($everConnected) {
+      "no browser connected to $webUrl for ${ShutdownGraceSeconds}s"
+    } else {
+      "no browser ever connected to $webUrl within ${FirstConnectGraceSeconds}s"
+    }
     $failed = $false
     break
   }
