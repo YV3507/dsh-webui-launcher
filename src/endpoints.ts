@@ -6,7 +6,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { WebUiRuntime } from './webui.ts'
+import type { WebUiRuntime, WebUiStatus } from './webui.ts'
 
 /** The webServer registration surface this plugin injects. */
 export interface WebServerLike {
@@ -20,8 +20,10 @@ export interface WebServerLike {
 /** The verb table: one JSON endpoint per runtime operation. */
 type WebUiVerb = 'status' | 'start' | 'stop' | 'open'
 
-interface RouteBody {
-  signal?: never
+/** A completed operation: a human message plus the status snapshot. */
+interface OperationResult {
+  message: string
+  status: WebUiStatus
 }
 
 /** Cross-site request guard: a browser request always carries an Origin (and
@@ -52,30 +54,21 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
  * Register the `/webui/*` routes over one runtime.
  * @param webServer - the injected webServer service.
  * @param runtime - the web UI runtime instance.
- * @returns the disposer unregistering every route.
+ * @returns the disposer unregistering every route and aborting in-flight starts.
  */
 export function registerWebUiEndpoints(webServer: WebServerLike, runtime: WebUiRuntime): () => void {
-  // The start endpoint aborts its wait when the client disconnects; the
-  // AbortController is stored per request and aborted on request close.
+  // `start` aborts its readiness wait when the requesting client disconnects;
+  // each request owns an AbortController stored here and aborted on close.
   const aborters = new Set<AbortController>()
 
-  const handlers: Record<WebUiVerb, (args: RouteBody, signal: AbortSignal) => Promise<{ message: string; status: unknown }>> = {
+  const handlers: Record<WebUiVerb, (signal: AbortSignal) => Promise<OperationResult>> = {
     status: async () => {
       const status = await runtime.status()
       return { message: status.ready ? `Web UI ready at ${status.url}` : `nothing serving ${status.url}`, status }
     },
-    start: async (_args, signal) => {
-      const result = await runtime.start(signal)
-      return { message: result.message, status: result.status }
-    },
-    stop: async () => {
-      const result = await runtime.stop()
-      return { message: result.message, status: result.status }
-    },
-    open: async () => {
-      const result = await runtime.open()
-      return { message: result.message, status: result.status }
-    },
+    start: async (signal) => runtime.start(signal),
+    stop: async () => runtime.stop(),
+    open: async () => runtime.open(),
   }
 
   const disposers = (Object.keys(handlers) as WebUiVerb[]).map((verb) =>
@@ -98,7 +91,7 @@ export function registerWebUiEndpoints(webServer: WebServerLike, runtime: WebUiR
           controller.abort()
         })
         try {
-          const result = await handlers[verb]({} as RouteBody, controller.signal)
+          const result = await handlers[verb](controller.signal)
           sendJson(res, 200, { ok: true, message: result.message, status: result.status })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)

@@ -3,11 +3,10 @@
  * Harness Web UI. It registers model tools `webui.status` / `webui.start` /
  * `webui.stop` / `webui.open`, a `/webui start|stop|status|open` slash
  * command, and the `/webui/*` JSON endpoints the browser half's Settings card
- * fetches. The heavy lifting lives in {@link WebUiRuntime} — the Node port of
- * the repo's Windows watchdog (`launcher/dsh-webui.ps1`). The PowerShell
- * launcher stays the desktop double-click product; this half is the
- * installable plugin core that makes the repo listable in the plugin
- * marketplace (`dsh plugin --profile web add github:YV3507/dsh-webui-launcher`).
+ * fetches. The heavy lifting lives in {@link WebUiRuntime} — the state-machine
+ * core (adopt-or-start, readiness wait, PID-guarded stop, orphan cleanup on
+ * unload). Installable into any profile via
+ * `dsh plugin --profile web add github:YV3507/dsh-webui-launcher`.
  *
  * @module dsh-webui-launcher
  */
@@ -17,7 +16,12 @@ import type { CommandDefinition } from '@deepseek-ai/dsh-commands'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import Schema from '@deepseek-ai/schemastery'
 import { registerWebUiEndpoints } from './endpoints.ts'
-import { WebUiRuntime, type WebUiStatus } from './webui.ts'
+import { defaultDeps, WebUiRuntime, type WebUiStatus } from './webui.ts'
+
+// Exported for the failure-path unit tests, which instantiate the runtime
+// with scripted fake dependencies against the built bundle.
+export { WebUiRuntime, defaultDeps } from './webui.ts'
+export type { WebUiOptions, WebUiRuntimeDeps, WebUiStatus, WebUiResult, RuntimeState } from './webui.ts'
 
 /** The plugin's name, as cordis entries reference it. */
 export const name = 'dsh-webui-launcher'
@@ -67,6 +71,7 @@ const output = {
           port: { type: 'number' },
           host: { type: 'string' },
           url: { type: 'string' },
+          state: { type: 'string' },
           listening: { type: 'boolean' },
           ready: { type: 'boolean' },
           spawned: { type: 'boolean' },
@@ -74,7 +79,7 @@ const output = {
           pid: { type: 'number' },
           exitCode: { type: 'number' },
         },
-        required: ['port', 'host', 'url', 'listening', 'ready', 'spawned', 'adopted'],
+        required: ['port', 'host', 'url', 'state', 'listening', 'ready', 'spawned', 'adopted'],
       },
     },
     required: ['ok', 'message', 'status'],
@@ -192,10 +197,18 @@ export function apply(ctx: Context, config: Partial<Config> | undefined): void {
     openBrowserOnStart: config?.openBrowserOnStart ?? true,
     maxLogLines: 25,
   }
-  const runtime = new WebUiRuntime(options)
+  const runtime = new WebUiRuntime(options, defaultDeps(options))
 
-  const disposeRoutes = registerWebUiEndpoints(ctx.webServer, runtime)
-  ctx.effect(() => disposeRoutes, 'dsh-webui-launcher.routes')
+  // One effect owns the whole lifecycle: on unload the routes are unregistered
+  // AND any server this plugin spawned is stopped (orphan guard for plugin
+  // unload/hot-reload).
+  ctx.effect(() => {
+    const disposeRoutes = registerWebUiEndpoints(ctx.webServer, runtime)
+    return () => {
+      disposeRoutes()
+      void runtime.dispose()
+    }
+  }, 'dsh-webui-launcher.lifecycle')
 
   for (const tool of buildTools(runtime)) {
     ctx.tools.register(tool)

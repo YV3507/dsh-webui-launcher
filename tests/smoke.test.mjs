@@ -1,85 +1,22 @@
 /**
- * Self-contained smoke test for the built dsh-webui-launcher plugin.
- *
- * Runs against lib/index.js with the two external runtime packages
- * (@deepseek-ai/dsh-tools, @deepseek-ai/schemastery) mocked in a temporary
- * node_modules — so `npm test` works right after `npm run build` with no
- * dependency install. It verifies:
- *   1. the plugin wiring: 4 tools, 1 slash command, 4 JSON routes registered;
- *   2. the runtime: status probes a live HTTP server, start adopts it,
- *      stop refuses to touch it, and the /webui command answers correctly.
+ * End-to-end smoke test for the built dsh-webui-launcher plugin: the wiring
+ * (4 tools, /webui command, 4 routes, exported runtime) and the runtime
+ * against a real live HTTP server on an ephemeral port (adopt path, no
+ * process spawning). The state-machine failure paths live in runtime.test.mjs.
  */
 
 import assert from 'node:assert/strict'
-import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import test from 'node:test'
+import { loadPlugin, makeContext } from './_helpers.mjs'
 
-/** Chainable schemastery mock sufficient for the plugin's Config schema. */
-const SCHEMA_MOCK = `
-function chain(init) {
-  const o = { ...init }
-  const self = {
-    default: (v) => { o.default = v; return self },
-    min: (v) => { o.min = v; return self },
-    max: (v) => { o.max = v; return self },
-    step: (v) => { o.step = v; return self },
-  }
-  return self
-}
-export default {
-  object: (fields) => ({ _kind: 'object', fields }),
-  string: () => chain({ _kind: 'string' }),
-  number: () => chain({ _kind: 'number' }),
-  boolean: () => chain({ _kind: 'boolean' }),
-}
-`
-
-/** Load the built plugin from a tmpdir whose node_modules mocks the externals. */
-async function loadPlugin() {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-webui-launcher-test-'))
-  const scope = join(dir, 'node_modules', '@deepseek-ai')
-  for (const name of ['dsh-tools', 'schemastery']) {
-    mkdirSync(join(scope, name), { recursive: true })
-    writeFileSync(join(scope, name, 'package.json'), JSON.stringify({
-      name: `@deepseek-ai/${name}`,
-      type: 'module',
-      exports: { '.': './index.js' },
-    }))
-  }
-  writeFileSync(join(scope, 'dsh-tools', 'index.js'), 'export function defineTool(def) { return def }')
-  writeFileSync(join(scope, 'schemastery', 'index.js'), SCHEMA_MOCK)
-  writeFileSync(join(dir, 'package.json'), '{"type":"module"}')
-  copyFileSync(new URL('../lib/index.js', import.meta.url), join(dir, 'index.js'))
-  return import(pathToFileURL(join(dir, 'index.js')).href)
-}
-
-/** A fake client Context capturing registrations. */
-function makeContext() {
-  const state = { tools: [], commands: [], routes: [] }
-  const ctx = {
-    state,
-    tools: { register: (t) => state.tools.push(t) },
-    commands: { register: (c) => state.commands.push(c) },
-    webServer: {
-      register: (route) => {
-        state.routes.push(route)
-        return () => {}
-      },
-    },
-    effect: (fn) => fn(),
-  }
-  return ctx
-}
-
-test('wiring: registers 4 tools, the /webui command and 4 routes', async () => {
+test('wiring: registers 4 tools, the /webui command, 4 routes and exports the runtime', async () => {
   const plugin = await loadPlugin()
   assert.equal(plugin.name, 'dsh-webui-launcher')
   assert.deepEqual(plugin.inject, ['tools', 'commands', 'webServer'])
   assert.equal(typeof plugin.apply, 'function')
+  assert.equal(typeof plugin.WebUiRuntime, 'function')
+  assert.equal(typeof plugin.defaultDeps, 'function')
   assert.equal(plugin.Config._kind, 'object')
   assert.deepEqual(Object.keys(plugin.Config.fields), ['port', 'host', 'cliBin', 'startupTimeoutMs', 'openBrowserOnStart'])
 
