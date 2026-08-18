@@ -4,6 +4,29 @@
 
 面向 Windows 的 DeepSeek Harness Web UI 双击启动器。它静默地在后台启动 `dsh --profile web`，用系统默认浏览器打开 Web UI，并在所有打开过 Web UI 的浏览器关闭后停止由它启动的 harness。
 
+## 作为 DSH 插件安装
+
+本仓库同时也是一个 DSH 插件（根目录 `package.json` 中的 `dsh.bundle`）：安装到任意 profile 后，harness 自身便获得一个 Web UI 控制器。`launcher/` 中的 Windows 脚本仍是桌面双击产品；插件则是运行在 dsh 内部的同一套功能。
+
+```sh
+dsh plugin --profile web add github:YV3507/dsh-webui-launcher
+```
+
+或从本地检出安装：
+
+```sh
+cd dsh-webui-launcher
+npm install && npm run build     # 或：pnpm install && pnpm run build
+dsh plugin --profile web add .
+```
+
+插件提供：
+
+- 模型工具 `webui.status` / `webui.start` / `webui.stop` / `webui.open` —— 启动器看门狗的跨平台 Node 实现（接管或启动、就绪等待、带 PID 校验的进程树停止、打开浏览器）。非本插件启动的服务器只接管、绝不停止。
+- `/webui start|stop|status|open` 斜杠命令。
+- Web UI 设置页上的「Web UI 启动器」卡片（浏览器半，`exports["./client"]`），驱动同一组 `/webui/*` JSON 端点。
+- 插件配置：`port`（默认 3080）、`host`（127.0.0.1）、`cliBin`（"" = 复用当前运行的 CLI）、`startupTimeoutMs`（120000）、`openBrowserOnStart`（true）。
+
 ## 安装
 
 需要 Windows 10/11 与 Node.js 22 或更高版本。用 PowerShell 运行安装器：
