@@ -10,21 +10,29 @@ import http from 'node:http'
 import test from 'node:test'
 import { loadPlugin, makeContext } from './_helpers.mjs'
 
-test('wiring: registers 4 tools, the /webui command, 4 routes and exports the runtime', async () => {
+test('wiring: registers 4 tools, the /webui command, 5 routes and exports the runtime', async () => {
   const plugin = await loadPlugin()
   assert.equal(plugin.name, 'dsh-webui-launcher')
   assert.deepEqual(plugin.inject, ['tools', 'commands', 'webServer'])
   assert.equal(typeof plugin.apply, 'function')
   assert.equal(typeof plugin.WebUiRuntime, 'function')
   assert.equal(typeof plugin.defaultDeps, 'function')
+  assert.equal(typeof plugin.ShortcutManager, 'function')
+  assert.equal(typeof plugin.convertImageToIcon, 'function')
+  assert.equal(typeof plugin.packIco, 'function')
   assert.equal(plugin.Config._kind, 'object')
-  assert.deepEqual(Object.keys(plugin.Config.fields), ['port', 'host', 'cliBin', 'startupTimeoutMs', 'openBrowserOnStart'])
+  assert.deepEqual(Object.keys(plugin.Config.fields), [
+    'port', 'host', 'cliBin', 'startupTimeoutMs', 'openBrowserOnStart',
+    'desktopShortcut', 'shortcutName', 'shortcutIconPath',
+  ])
 
   const ctx = makeContext()
   plugin.apply(ctx, {})
   assert.deepEqual(ctx.state.tools.map((t) => t.name).sort(), ['webui.open', 'webui.start', 'webui.status', 'webui.stop'])
   assert.deepEqual(ctx.state.commands.map((c) => c.name), ['webui'])
-  assert.deepEqual(ctx.state.routes.map((r) => r.path).sort(), ['/webui/open', '/webui/start', '/webui/status', '/webui/stop'])
+  assert.deepEqual(ctx.state.routes.map((r) => r.path).sort(), [
+    '/webui/icon', '/webui/open', '/webui/start', '/webui/status', '/webui/stop',
+  ])
 })
 
 test('runtime: status/start/stop against a live HTTP server on an ephemeral port', async (t) => {

@@ -21,6 +21,13 @@ export const en = {
   spawned: 'Started by this plugin',
   adopted: 'Adopted — this plugin did not start it and will not stop it',
   unknown: 'Unknown',
+  iconTitle: 'Shortcut icon',
+  iconHint: 'PNG, JPEG, BMP, GIF or TIFF — converted automatically (ICO on Windows, PNG on Linux).',
+  chooseIcon: 'Choose an image',
+  applyIcon: 'Apply icon',
+  iconApplied: 'Shortcut icon updated',
+  iconFailed: 'Icon update failed',
+  noShortcut: 'No desktop shortcut exists yet',
 }
 
 export const zh = {
@@ -39,6 +46,13 @@ export const zh = {
   spawned: '由本插件启动',
   adopted: '已接管（非本插件启动，不会被停止）',
   unknown: '未知',
+  iconTitle: '快捷方式图标',
+  iconHint: '支持 PNG/JPEG/BMP/GIF/TIFF，自动转换（Windows 用 ICO，Linux 用 PNG）。',
+  chooseIcon: '选择图片',
+  applyIcon: '应用图标',
+  iconApplied: '快捷方式图标已更新',
+  iconFailed: '图标更新失败',
+  noShortcut: '尚未创建桌面快捷方式',
 }
 
 export type WebUiKey = keyof typeof en

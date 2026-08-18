@@ -32,12 +32,12 @@ interface WireResponse {
 }
 
 /** POST one verb and parse the wire envelope. */
-async function call(verb: string): Promise<WireResponse> {
+async function call(verb: string, body = '{}'): Promise<WireResponse> {
   try {
     const response = await fetch(`/webui/${verb}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: '{}',
+      body,
     })
     if (!response.ok) return { ok: false, error: `HTTP ${response.status}` }
     return (await response.json()) as WireResponse
@@ -88,6 +88,11 @@ export function WebUISection({ t }: WebUiSectionProps) {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [iconData, setIconData] = useState('')
+  const [iconPreview, setIconPreview] = useState('')
+  const [iconName, setIconName] = useState('')
+  const [iconBusy, setIconBusy] = useState(false)
+  const [iconResult, setIconResult] = useState<{ ok: boolean; text: string } | null>(null)
   const alive = useRef(true)
 
   // Poll status while the section is mounted.
@@ -122,6 +127,30 @@ export function WebUISection({ t }: WebUiSectionProps) {
     // Refresh status once more after the action settles.
     const fresh = await call('status')
     if (alive.current && fresh.ok && fresh.status) setStatus(fresh.status)
+  }
+
+  const onIconFile = (file: File | undefined): void => {
+    if (file === undefined) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === 'string' ? reader.result : ''
+      const comma = dataUrl.indexOf(',')
+      setIconData(comma >= 0 ? dataUrl.slice(comma + 1) : '')
+      setIconPreview(dataUrl)
+      setIconName(file.name)
+      setIconResult(null)
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const applyIcon = async (): Promise<void> => {
+    if (iconData === '') return
+    setIconBusy(true)
+    setIconResult(null)
+    const result = await call('icon', JSON.stringify({ data: iconData, name: iconName }))
+    if (!alive.current) return
+    setIconBusy(false)
+    setIconResult({ ok: result.ok, text: result.message ?? result.error ?? translate('unknown') })
   }
 
   const stateLabel = status
@@ -163,6 +192,38 @@ export function WebUISection({ t }: WebUiSectionProps) {
         </p>
       ) : null}
       {message !== '' ? <p style={styles.message}>{message}</p> : null}
+      <hr style={{ border: 'none', borderTop: '1px solid rgba(127,127,127,.25)', margin: '14px 0' }} />
+      <strong>{translate('iconTitle')}</strong>
+      <p style={styles.muted}>{translate('iconHint')}</p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '8px 0' }}>
+        <label
+          style={{
+            ...styles.button,
+            display: 'inline-block',
+            cursor: 'pointer',
+            padding: '4px 10px',
+          }}
+        >
+          {translate('chooseIcon')}
+          <input
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={(event) => onIconFile(event.target.files?.[0])}
+          />
+        </label>
+        {iconPreview !== '' ? (
+          <img src={iconPreview} alt={iconName} style={{ width: 40, height: 40, objectFit: 'contain', border: '1px solid rgba(127,127,127,.4)', borderRadius: 6 }} />
+        ) : null}
+        <button type="button" style={styles.button} disabled={iconBusy || iconData === ''} onClick={() => void applyIcon()}>
+          {iconBusy ? translate('busy') : translate('applyIcon')}
+        </button>
+      </div>
+      {iconResult !== null ? (
+        <p style={iconResult.ok ? styles.message : { ...styles.message, color: '#f85149' }}>
+          {iconResult.ok ? translate('iconApplied') : translate('iconFailed')}: {iconResult.text}
+        </p>
+      ) : null}
     </div>
   )
 }

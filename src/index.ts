@@ -14,14 +14,27 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { CommandDefinition } from '@deepseek-ai/dsh-commands'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import Schema from '@deepseek-ai/schemastery'
-import { registerWebUiEndpoints } from './endpoints.ts'
+import process from 'node:process'
+import { resolveCli } from './cli.ts'
+import { registerWebUiEndpoints, type IconUploadResult } from './endpoints.ts'
+import { convertImageToIcon } from './icon.ts'
+import { managedDirFor, ShortcutManager, defaultShortcutDeps } from './shortcut.ts'
 import { defaultDeps, WebUiRuntime, type WebUiStatus } from './webui.ts'
 
 // Exported for the failure-path unit tests, which instantiate the runtime
 // with scripted fake dependencies against the built bundle.
 export { WebUiRuntime, defaultDeps } from './webui.ts'
 export type { WebUiOptions, WebUiRuntimeDeps, WebUiStatus, WebUiResult, RuntimeState } from './webui.ts'
+// Exported for the icon/shortcut unit tests.
+export { ShortcutManager, defaultShortcutDeps, managedDirFor } from './shortcut.ts'
+export type { ShortcutManagerDeps, ShortcutManagerOptions } from './shortcut.ts'
+export { convertImageToIcon, packIco } from './icon.ts'
+export type { IconSet } from './icon.ts'
+export { detectDesktopDir } from './desktop.ts'
+export type { LauncherSpec, ShortcutHandle } from './desktop.ts'
 
 /** The plugin's name, as cordis entries reference it. */
 export const name = 'dsh-webui-launcher'
@@ -41,6 +54,12 @@ export interface Config {
   startupTimeoutMs: number
   /** Open the default browser once the Web UI is ready. */
   openBrowserOnStart: boolean
+  /** Create a desktop launcher shortcut on the first plugin start. */
+  desktopShortcut: boolean
+  /** Display name of the desktop shortcut. */
+  shortcutName: string
+  /** Optional explicit icon image path used when creating the shortcut. */
+  shortcutIconPath: string
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -49,6 +68,9 @@ export const Config: Schema<Config> = Schema.object({
   cliBin: Schema.string().default(''),
   startupTimeoutMs: Schema.number().step(1).min(1000).default(120000),
   openBrowserOnStart: Schema.boolean().default(true),
+  desktopShortcut: Schema.boolean().default(true),
+  shortcutName: Schema.string().min(1).default('DeepSeek Harness Web UI'),
+  shortcutIconPath: Schema.string().default(''),
 })
 
 /** The canonical value of every webui tool: status + one human message. */
@@ -199,11 +221,62 @@ export function apply(ctx: Context, config: Partial<Config> | undefined): void {
   }
   const runtime = new WebUiRuntime(options, defaultDeps(options))
 
+  // Desktop shortcut: created once on the first start, headless-safe. The
+  // launcher spec reuses the same CLI resolution as the runtime's spawn;
+  // resolution failure degrades the shortcut feature only (never the boot).
+  const managedDir = managedDirFor()
+  let shortcut: ShortcutManager | null = null
+  try {
+    const cli = resolveCli(options.cliBin)
+    const spec = {
+      command: process.execPath,
+      cliArgs: [...cli.prefixArgs, cli.entry, '--profile', 'web', '--host', options.host, '--port', String(options.port)],
+      cwd: cli.cwd,
+      url: `http://${options.host}:${options.port}`,
+      description: 'Launch the DeepSeek Harness Web UI',
+    }
+    shortcut = new ShortcutManager({
+      desktopShortcut: config?.desktopShortcut ?? true,
+      shortcutName: config?.shortcutName ?? 'DeepSeek Harness Web UI',
+      shortcutIconPath: config?.shortcutIconPath ?? '',
+      managedDir,
+      spec,
+    }, defaultShortcutDeps())
+    // Never blocks or crashes boot: creation failures are logged inside.
+    void shortcut.ensure()
+  } catch (error) {
+    console.log(`[dsh-webui-launcher] desktop shortcut disabled: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  // Uploaded shortcut icons: convert to the platform format, persist, and
+  // apply to the existing shortcut immediately.
+  const iconUpload = async (bytes: Buffer, name: string): Promise<IconUploadResult> => {
+    try {
+      const set = await convertImageToIcon(bytes)
+      mkdirSync(managedDir, { recursive: true })
+      const icoPath = join(managedDir, 'icon.ico')
+      const pngPath = join(managedDir, 'icon.png')
+      writeFileSync(icoPath, set.ico)
+      writeFileSync(pngPath, set.png)
+      const iconFile = process.platform === 'win32' ? icoPath : pngPath
+      const applied = shortcut !== null
+        ? await shortcut.applyIcon(iconFile)
+        : { ok: false, message: 'desktop shortcut unavailable' }
+      return {
+        ok: applied.ok,
+        message: `${applied.message} (converted from "${name || 'image'}" to ${process.platform === 'win32' ? 'ICO' : 'PNG'})`,
+        formats: ['ico', 'png'],
+      }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   // One effect owns the whole lifecycle: on unload the routes are unregistered
   // AND any server this plugin spawned is stopped (orphan guard for plugin
   // unload/hot-reload).
   ctx.effect(() => {
-    const disposeRoutes = registerWebUiEndpoints(ctx.webServer, runtime)
+    const disposeRoutes = registerWebUiEndpoints(ctx.webServer, runtime, iconUpload)
     return () => {
       disposeRoutes()
       void runtime.dispose()

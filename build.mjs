@@ -17,7 +17,8 @@ const common = {
   legalComments: 'none',
 }
 
-/** Host half: ESM, official packages resolve at runtime through peer deps. */
+/** Host half: ESM, official packages resolve at runtime through peer deps;
+ * jimp (lazy-imported for icon conversion) is a declared runtime dependency. */
 await build({
   ...common,
   entryPoints: [join(root, 'src/index.ts')],
@@ -25,7 +26,7 @@ await build({
   format: 'esm',
   platform: 'node',
   target: 'node18',
-  external: ['@deepseek-ai/*'],
+  external: ['@deepseek-ai/*', 'jimp'],
 })
 
 /** Browser half: the __ModuleLoader__ factory contract; react + official

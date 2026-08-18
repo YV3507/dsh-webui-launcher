@@ -1,6 +1,6 @@
 {
   "name": "dsh-webui-launcher",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Cross-platform Web UI launcher plugin for DeepSeek Harness: webui.start/stop/status/open model tools, a /webui slash command and a Settings-page launch card.",
   "license": "MIT",
   "author": "YV3507",
@@ -64,7 +64,8 @@
     "@deepseek-ai/dsh-client-locale": ">=0.0.1-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.2.0-0"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "^3.18.1"
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "jimp": "^1.6.0"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
