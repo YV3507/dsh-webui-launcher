@@ -23,7 +23,9 @@ dsh plugin --profile web add .
 - 模型工具 `webui.status` / `webui.start` / `webui.stop` / `webui.open`——后台启动 Web UI（spawn `dsh --profile web`）、等待 HTTP 200、查询或停止、打开默认浏览器。
 - `/webui start|stop|status|open` 斜杠命令。
 - Web UI 设置页上的「Web UI 启动器」卡片（浏览器半，`exports["./client"]`），驱动同一组 `/webui/*` JSON 端点。
-- 插件配置：`port`（默认 3080）、`host`（127.0.0.1）、`cliBin`（"" = 复用当前运行的 CLI）、`startupTimeoutMs`（120000）、`openBrowserOnStart`（true）。
+- **桌面快捷方式**：首次启动插件时在桌面自动创建启动器快捷方式（Windows `.lnk` / Linux `.desktop` / macOS `.command`），双击后启动 Web UI 并在就绪时打开浏览器。无头主机（无桌面、无 DISPLAY）会静默跳过——插件在服务器上绝不会因此崩溃。可用 `desktopShortcut: false` 关闭。
+- **自定义快捷方式图标**：在设置卡片上传任意图片（PNG/JPEG/BMP/GIF/TIFF），自动转换（Windows 生成多尺寸 `.ico`，Linux 生成 `.png`）并立即更新已有快捷方式的图标；若尚未创建快捷方式（无头/已禁用），转换后的图标仍会保存，供将来创建时使用。
+- 插件配置：`port`（默认 3080）、`host`（127.0.0.1）、`cliBin`（"" = 复用当前运行的 CLI）、`startupTimeoutMs`（120000）、`openBrowserOnStart`（true）、`desktopShortcut`（true）、`shortcutName`（"DeepSeek Harness Web UI"）、`shortcutIconPath`（"" = 快捷方式的显式图标图片）。
 
 ## 行为与健壮性
 

@@ -23,7 +23,9 @@ dsh plugin --profile web add .
 - Model tools `webui.status`, `webui.start`, `webui.stop`, `webui.open` — start the Web UI (spawning `dsh --profile web` in the background), wait until it answers HTTP 200, report or stop it, open the default browser.
 - A `/webui start|stop|status|open` slash command.
 - A "Web UI Launcher" card on the Settings page of the web GUI (browser half, `exports["./client"]`), driving the same `/webui/*` JSON endpoints.
-- Plugin config: `port` (default 3080), `host` (127.0.0.1), `cliBin` ("" = reuse the running CLI), `startupTimeoutMs` (120000), `openBrowserOnStart` (true).
+- **Desktop shortcut**: on the first plugin start, a launcher shortcut is created on the desktop (`.lnk` on Windows, `.desktop` on Linux, `.command` on macOS) that starts the Web UI and opens the browser once ready. Headless hosts (no Desktop, no DISPLAY) skip creation silently — the plugin never crashes on a server. Disable with `desktopShortcut: false`.
+- **Custom shortcut icon**: upload any image (PNG/JPEG/BMP/GIF/TIFF) from the Settings card; it is converted automatically (multi-size `.ico` on Windows, `.png` on Linux) and the existing shortcut's icon is updated immediately. Without a shortcut (headless/disabled), the converted icon is still persisted for a future creation.
+- Plugin config: `port` (default 3080), `host` (127.0.0.1), `cliBin` ("" = reuse the running CLI), `startupTimeoutMs` (120000), `openBrowserOnStart` (true), `desktopShortcut` (true), `shortcutName` ("DeepSeek Harness Web UI"), `shortcutIconPath` ("" = explicit icon image for the shortcut).
 
 ## Behavior and robustness
 
