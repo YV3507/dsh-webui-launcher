@@ -30,3 +30,18 @@ export async function probeHttpReady(url: string, timeoutMs = 3000): Promise<boo
     return false
   }
 }
+
+/** True when the web client's API transport prefix is up — the connection
+ * layer every client plugin depends on. A plain GET on the mux events path
+ * answers 426 Upgrade Required once the connection plugin registered its
+ * route; before that it 404s and the browser would boot to "Failed to load
+ * plugins" (every entry pending on `connection`). */
+export async function probeApiReady(url: string, timeoutMs = 3000): Promise<boolean> {
+  try {
+    const base = url.replace(/\/+$/, '')
+    const response = await fetch(`${base}/api/events.mux`, { signal: AbortSignal.timeout(timeoutMs) })
+    return response.status === 426
+  } catch {
+    return false
+  }
+}

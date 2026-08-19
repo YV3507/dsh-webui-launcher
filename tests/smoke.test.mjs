@@ -37,7 +37,14 @@ test('wiring: registers 4 tools, the /webui command, 5 routes and exports the ru
 })
 
 test('runtime: status/start/stop against a live HTTP server on an ephemeral port', async (t) => {
-  const server = http.createServer((_req, res) => {
+  // The web client's API transport must answer 426 on the mux events path for
+  // the app to count as ready (mirrors dsh web's connection plugin).
+  const server = http.createServer((req, res) => {
+    if (req.url === '/api/events.mux') {
+      res.statusCode = 426
+      res.end('upgrade required')
+      return
+    }
     res.statusCode = 200
     res.end('ok')
   })

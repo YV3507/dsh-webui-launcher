@@ -25,7 +25,7 @@
 import { openBrowser as defaultOpenBrowser } from './browser.ts'
 import { resolveCli as defaultResolveCli, type ResolvedCli } from './cli.ts'
 import { spawnServer as defaultSpawnServer, type SpawnedServer } from './process.ts'
-import { probeHttpReady as defaultProbeHttpReady, probeListening as defaultProbeListening } from './probe.ts'
+import { probeApiReady as defaultProbeApiReady, probeHttpReady as defaultProbeHttpReady, probeListening as defaultProbeListening } from './probe.ts'
 
 export interface WebUiOptions {
   /** Web UI port (1..65535). Default 3080 (the dsh web default). */
@@ -78,6 +78,8 @@ export interface WebUiResult {
 export interface WebUiRuntimeDeps {
   probeListening(host: string, port: number): Promise<boolean>
   probeHttpReady(url: string): Promise<boolean>
+  /** The web client's API transport prefix answers 426 (all plugins loaded). */
+  probeApiReady(url: string): Promise<boolean>
   resolveCli(): ResolvedCli
   spawnServer(cli: ResolvedCli, host: string, port: number): SpawnedServer
   openBrowser(url: string): Promise<boolean>
@@ -90,6 +92,7 @@ export function defaultDeps(options: WebUiOptions): WebUiRuntimeDeps {
   return {
     probeListening: (host, port) => defaultProbeListening(host, port),
     probeHttpReady: (url) => defaultProbeHttpReady(url),
+    probeApiReady: (url) => defaultProbeApiReady(url),
     resolveCli: () => defaultResolveCli(options.cliBin),
     spawnServer: (cli, host, port) => defaultSpawnServer({
       command: cli.command,
@@ -135,7 +138,12 @@ export class WebUiRuntime {
   /** A status snapshot without side effects (port probes are the only I/O). */
   async status(): Promise<WebUiStatus> {
     const listening = await this.deps.probeListening(this.options.host, this.options.port)
-    const ready = listening ? await this.deps.probeHttpReady(this.url) : false
+    // "Ready" means the shell answers 200 AND the client API transport is up
+    // (426 on /api/events.mux) — otherwise the browser would boot to
+    // "Failed to load plugins" (all entries pending on `connection`).
+    const ready = listening
+      ? (await this.deps.probeHttpReady(this.url)) && (await this.deps.probeApiReady(this.url))
+      : false
     const spawned = this.server !== null && this.server.exitCode() === null
     return {
       port: this.options.port,
@@ -217,7 +225,8 @@ export class WebUiRuntime {
             )
           }
           if (await this.deps.probeListening(this.options.host, this.options.port)) {
-            if (await this.deps.probeHttpReady(this.url)) break
+            if (await this.deps.probeHttpReady(this.url)
+              && await this.deps.probeApiReady(this.url)) break
           }
           if (this.deps.now() - startedAt > this.options.startupTimeoutMs) {
             await this.stopSpawned()

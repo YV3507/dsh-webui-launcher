@@ -1,0 +1,20 @@
+fix: open the browser only when the web client is fully ready
+
+The launcher polled GET / (the shell answers 200 as soon as the HTTP server
+binds), so the browser often opened before the host's connection layer was
+registered — the page then booted to "Failed to load plugins" with every
+entry pending on `connection` (a refresh recovered it).
+
+Readiness now requires the shell AND the client API transport: GET
+/api/events.mux must answer 426 Upgrade Required (the connection plugin's
+route), which is what every client plugin depends on.
+
+- probe.ts: new probeApiReady (GET /api/events.mux == 426)
+- webui.ts: status()/start() consider the app ready only when both probes
+  pass; webui_start waits for the API transport instead of the bare shell
+- desktop.ts: launch.cmd polls both endpoints via curl.exe (%% is cmd's
+  literal-percent escape for %{http_code}); launch.sh gains an is_ready()
+  helper with the same check
+
+Verified against the live harness: GET / = 200, GET /api/events.mux = 426;
+34 tests pass (new API-transport gating test).

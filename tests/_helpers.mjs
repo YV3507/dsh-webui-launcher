@@ -87,7 +87,7 @@ export function baseOptions() {
  * scenarios run without real waiting.
  */
 export function fakeDeps(overrides = {}) {
-  const calls = { spawns: 0, kills: 0, probes: 0, httpReady: 0 }
+  const calls = { spawns: 0, kills: 0, probes: 0, httpReady: 0, apiReady: 0 }
   const clock = { t: 0 }
   let code = null
   const server = {
@@ -113,6 +113,10 @@ export function fakeDeps(overrides = {}) {
     },
     probeHttpReady: async () => {
       calls.httpReady += 1
+      return true
+    },
+    probeApiReady: async () => {
+      calls.apiReady += 1
       return true
     },
     resolveCli: () => ({ command: process.execPath, prefixArgs: [], entry: '/x/lib/bin.js', cwd: '/x' }),

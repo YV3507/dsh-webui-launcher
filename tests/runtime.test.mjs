@@ -44,6 +44,30 @@ test('runtime: start spawns and reports ready once HTTP 200', async () => {
   assert.match(result.message, /Web UI ready at http:\/\/127\.0\.0\.1:3080 \(pid 4242\)/)
 })
 
+test('runtime: start waits until the API transport is ready (426 on /api/events.mux)', async () => {
+  const plugin = await loadPlugin()
+  let apiCalls = 0
+  const { deps } = fakeDeps({
+    probeListening: sequencedProbe([false, false, true, true, true]),
+    // The API transport comes up on the second probe.
+    probeApiReady: async () => {
+      apiCalls += 1
+      return apiCalls > 1
+    },
+  })
+  const rt = new plugin.WebUiRuntime(baseOptions(), deps)
+
+  const result = await rt.start(new AbortController().signal)
+
+  // The shell answered 200 before the API transport was up; start must keep
+  // polling instead of declaring ready (the browser would boot to "Failed to
+  // load plugins").
+  assert.ok(apiCalls >= 2)
+  assert.equal(result.status.ready, true)
+  assert.equal(result.status.spawned, true)
+  assert.match(result.message, /Web UI ready/)
+})
+
 test('runtime: start fails loudly with the log tail when the child exits before serving', async () => {
   const plugin = await loadPlugin()
   const { deps, calls, server } = fakeDeps()

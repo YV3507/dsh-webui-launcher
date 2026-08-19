@@ -40,9 +40,12 @@ test('launcher script: Windows .cmd polls until ready with the correct polarity'
   // The spawned CLI must run from spec.cwd (tsx resolvable in checkout
   // layouts), not from wherever the .lnk happened to point.
   assert.match(cmd, /cd \/d "/)
-  // Loop while NOT ready (exit 1), fall through to open the browser once ready.
-  assert.match(cmd, /exit \(\$r -ne 200\)/)
-  assert.doesNotMatch(cmd, /exit \(\$r -eq 200\)/)
+  // Ready = shell 200 AND the client API transport up (426 on the mux path);
+  // the generated file keeps cmd's literal-percent escape (%% -> %).
+  assert.match(cmd, /curl\.exe/)
+  assert.match(cmd, /api\/events\.mux/)
+  assert.match(cmd, /%%\{http_code\}/)
+  assert.doesNotMatch(cmd, /\$r -eq 200/)
   // Already serving? Skip the spawn and open the browser directly.
   assert.match(cmd, /if not errorlevel 1 goto open/)
   assert.match(cmd, /if errorlevel 1 \( timeout \/t 1 \/nobreak >nul & goto loop \)/)
@@ -71,6 +74,8 @@ test('launcher script: POSIX .sh polls with curl before opening the browser', as
   const script = readFileSync(path, 'utf8')
 
   assert.match(script, /cd "/)
+  assert.match(script, /is_ready\(\) \{/)
+  assert.match(script, /api\/events\.mux/)
   assert.match(script, /while \[ \$i -lt 120 \]/)
   assert.match(script, /curl -sf/)
 })
