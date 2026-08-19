@@ -75,11 +75,31 @@ export function resolveWorkingDir(cliScript: string): string {
   return dirname(cliScript)
 }
 
+/** A working directory from which `--import tsx/esm` can resolve tsx: the
+ * @deepseek-ai/dsh package dir first, then the host's own cwd (the host was
+ * itself launched with tsx, so its cwd resolves it), else the package dir. */
+function chooseTsxCwd(script: string): string {
+  const pkgDir = resolveWorkingDir(script)
+  if (tsxResolvable(pkgDir)) return pkgDir
+  if (tsxResolvable(process.cwd())) return process.cwd()
+  return pkgDir
+}
+
+/** Whether `require('tsx')` resolves from `dir` (walking up its parents). */
+function tsxResolvable(dir: string): boolean {
+  try {
+    createRequire(join(dir, '__dsh_tsx_probe__.cjs')).resolve('tsx')
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** Full spawn spec for the web server process. */
 export function resolveCli(cliBin: string, argvScript?: string): ResolvedCli {
   const script = resolveCliScript(cliBin, argvScript)
   if (script.endsWith('.ts')) {
-    return { command: process.execPath, prefixArgs: ['--import', 'tsx/esm'], entry: script, cwd: resolveWorkingDir(script) }
+    return { command: process.execPath, prefixArgs: ['--import', 'tsx/esm'], entry: script, cwd: chooseTsxCwd(script) }
   }
   if (/\.(js|cjs|mjs)$/.test(script)) {
     return { command: process.execPath, prefixArgs: [], entry: script, cwd: resolveWorkingDir(script) }

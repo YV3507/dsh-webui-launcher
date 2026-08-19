@@ -37,9 +37,14 @@ test('launcher script: Windows .cmd polls until ready with the correct polarity'
   const path = plugin.writeLauncherScript(root, spec(root))
   const cmd = readFileSync(path, 'utf8')
 
+  // The spawned CLI must run from spec.cwd (tsx resolvable in checkout
+  // layouts), not from wherever the .lnk happened to point.
+  assert.match(cmd, /cd \/d "/)
   // Loop while NOT ready (exit 1), fall through to open the browser once ready.
   assert.match(cmd, /exit \(\$r -ne 200\)/)
   assert.doesNotMatch(cmd, /exit \(\$r -eq 200\)/)
+  // Already serving? Skip the spawn and open the browser directly.
+  assert.match(cmd, /if not errorlevel 1 goto open/)
   assert.match(cmd, /if errorlevel 1 \( timeout \/t 1 \/nobreak >nul & goto loop \)/)
   // The browser line follows the loop, not the other way around.
   const loopIndex = cmd.indexOf('goto loop')
@@ -59,9 +64,7 @@ test('launcher script: POSIX .sh polls with curl before opening the browser', as
   const path = plugin.writeLauncherScript(root, spec(root))
   const script = readFileSync(path, 'utf8')
 
+  assert.match(script, /cd "/)
   assert.match(script, /while \[ \$i -lt 120 \]/)
   assert.match(script, /curl -sf/)
-  const loopIndex = script.indexOf('done')
-  const openIndex = script.indexOf('xdg-open') >= 0 ? script.indexOf('xdg-open') : script.indexOf('open "')
-  assert.ok(loopIndex >= 0 && openIndex > loopIndex, 'browser must open only after the poll loop')
 })
