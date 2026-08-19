@@ -30,9 +30,9 @@ dsh plugin --profile web add .
 
 ## Behavior and robustness
 
-- **Adopt-or-start**: a server already listening on the port is adopted — never restarted, never stopped. `webui_stop` only ever kills the process tree this plugin spawned.
+- **Adopt-or-start**: a server already listening on the port is adopted — never restarted, never stopped. `webui_stop` kills the process tree this plugin spawned, and also an adopted server whose PID the desktop launcher (or an earlier plugin instance) recorded — only when the recorded PID is the one currently listening, and with the same node.exe identity guard before killing. A foreign server without a PID record is never touched.
 - **Explicit state machine**: `idle → starting → running → stopping`, with single-flight serialization — concurrent `start`/`stop` calls never interleave.
-- **Orphan cleanup**: when the plugin unloads or hot-reloads, any server it spawned is stopped (`ctx.effect` dispose).
+- **Orphan cleanup**: when the plugin unloads or hot-reloads, any server it spawned — and any PID-recorded launcher server — is stopped (`ctx.effect` dispose).
 - **PID identity guard**: before killing, the process is re-checked (alive, still our child, and on Windows still `node.exe` via tasklist) so a recycled PID is never touched.
 - **Abort/timeout hygiene**: an aborted or timed-out start kills the child it spawned and surfaces the output tail in the error.
 - **CLI location fallback chain**: the running CLI (`process.argv[1]`) → the `@deepseek-ai/dsh` package → explicit `cliBin` config; resolution failure throws an actionable error.

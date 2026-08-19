@@ -150,6 +150,93 @@ function runTaskkill(pid: number): Promise<void> {
   })
 }
 
+/** Whether a PID still exists (Windows: tasklist row; POSIX: kill(pid, 0)). */
+function processExists(pid: number): Promise<boolean> {
+  if (process.platform !== 'win32') {
+    try {
+      process.kill(pid, 0)
+      return Promise.resolve(true)
+    } catch {
+      return Promise.resolve(false)
+    }
+  }
+  const tasklist = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tasklist.exe')
+  return new Promise((resolve) => {
+    execFile(tasklist, ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { windowsHide: true }, (error, stdout) => {
+      if (error) {
+        resolve(false)
+        return
+      }
+      resolve(stdout.trim() !== '')
+    })
+  })
+}
+
+/** Parse the listening PID out of `netstat -ano` output for a port. Pure, so
+ * tests can exercise the parser without a real netstat. */
+export function parseNetstatPid(output: string, port: number): number | null {
+  const re = new RegExp(`:${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)`)
+  for (const line of output.split(/\r?\n/)) {
+    const m = re.exec(line)
+    if (m) {
+      const pid = Number(m[1]!)
+      if (Number.isInteger(pid) && pid > 0) return pid
+    }
+  }
+  return null
+}
+
+/** The PID listening on host:port (Windows: netstat; POSIX: lsof), or null. */
+export async function pidForPort(host: string, port: number): Promise<number | null> {
+  if (process.platform === 'win32') {
+    const netstat = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'netstat.exe')
+    const out = await new Promise<string>((resolve) => {
+      execFile(netstat, ['-ano'], { windowsHide: true }, (error, stdout) => resolve(error ? '' : stdout))
+    })
+    return parseNetstatPid(out, port)
+  }
+  try {
+    const { execFile: execFilePosix } = await import('node:child_process')
+    const out = await new Promise<string>((resolve) => {
+      execFilePosix('lsof', ['-nP', '-iTCP:' + String(port), '-sTCP:LISTEN', '-t'], { windowsHide: true }, (error, stdout) => resolve(error ? '' : stdout))
+    })
+    const pid = Number(out.trim().split(/\s+/)[0] ?? '')
+    return Number.isInteger(pid) && pid > 0 ? pid : null
+  } catch {
+    return null
+  }
+}
+
+/** Kill an arbitrary process tree by PID, identity-guarded: on Windows only a
+ * process that currently names node.exe is killed (recycled-PID protection),
+ * mirroring the spawned-child kill path. */
+export async function killPidTree(pid: number): Promise<boolean> {
+  if (process.platform === 'win32') {
+    if (!(await looksLikeNode(pid))) return false
+    await runTaskkill(pid)
+  } else {
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch {
+      /* already gone */
+    }
+  }
+  for (let i = 0; i < 15; i += 1) {
+    if (!(await processExists(pid))) return true
+    await delay(200)
+  }
+  if (process.platform !== 'win32') {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      /* already gone */
+    }
+    await delay(300)
+    if (!(await processExists(pid))) return true
+  }
+  return false
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }

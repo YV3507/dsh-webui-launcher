@@ -37,7 +37,7 @@ export type { IconSet } from './icon.ts'
 // Exported for the launcher-script/spawn tests (desktop .cmd polarity, spawn
 // failure fast-path).
 export { writeLauncherScript } from './desktop.ts'
-export { spawnServer } from './process.ts'
+export { killPidTree, parseNetstatPid, pidForPort, spawnServer } from './process.ts'
 export type { SpawnedServer, SpawnOptions } from './process.ts'
 export { detectDesktopDir } from './desktop.ts'
 export type { LauncherSpec, ShortcutHandle } from './desktop.ts'
@@ -231,6 +231,10 @@ function bundledDshIcon(): string {
 
 /** Load the runtime, register tools/commands/routes, and release them with the fiber. */
 export function apply(ctx: Context, config: Partial<Config> | undefined): void {
+  // The managed dir is computed first: the runtime records the spawned
+  // server's PID here so a later instance (or the desktop launcher) can stop
+  // it, and the shortcut/icon features below reuse it.
+  const managedDir = managedDirFor()
   const options = {
     port: config?.port ?? 3080,
     host: config?.host ?? '127.0.0.1',
@@ -238,13 +242,13 @@ export function apply(ctx: Context, config: Partial<Config> | undefined): void {
     startupTimeoutMs: config?.startupTimeoutMs ?? 120000,
     openBrowserOnStart: config?.openBrowserOnStart ?? true,
     maxLogLines: 25,
+    adoptedPidFile: join(managedDir, 'server.pid'),
   }
   const runtime = new WebUiRuntime(options, defaultDeps(options))
 
   // Desktop shortcut: created once on the first start, headless-safe. The
   // launcher spec reuses the same CLI resolution as the runtime's spawn;
   // resolution failure degrades the shortcut feature only (never the boot).
-  const managedDir = managedDirFor()
   // Default shortcut icon: the bundled dsh icon, copied into the persistent
   // managed dir so a node_modules reinstall never orphans the .lnk's icon.
   // An explicit `shortcutIconPath` config wins; an unavailable asset degrades

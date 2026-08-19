@@ -1,0 +1,19 @@
+fix: webui_stop now closes launcher-started servers
+
+Closing all webui left a Node.js process behind whenever the server had been
+started through the desktop shortcut (launch-server.vbs) — the runtime only
+tracked servers it spawned itself, so every stop path treated the launcher
+server as "adopted" and refused to touch it.
+
+- launcher (launch.cmd / launch.sh): on the SPAWN path only, records the
+  server PID (netstat / lsof) to <managed>/server.pid — the already-serving
+  path never claims a foreign server's PID
+- webui.ts: stop()/dispose() stop an adopted server when the recorded PID is
+  the one currently listening, with the same node.exe identity guard; a
+  pid-watcher lag after taskkill /F is confirmed via the port so the result
+  reports the truth
+- process.ts: pidForPort() (netstat/lsof) and killPidTree() (identity-guarded)
+
+Verified end-to-end: a VBS-hidden launcher server on a free port is stopped
+by runtime.stop() with an accurate message and no lingering process; 41 tests
+pass.

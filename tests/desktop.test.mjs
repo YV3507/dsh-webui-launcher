@@ -55,10 +55,15 @@ test('launcher script: Windows .cmd polls until ready with the correct polarity'
   const vbs = readFileSync(join(root, 'launch-server.vbs'), 'utf8')
   assert.match(vbs, /sh\.CurrentDirectory = "/)
   assert.match(vbs, /sh\.Run ".*", 0, False/)
-  // The browser line follows the loop, not the other way around.
+  // The SPAWN path records the server PID (netstat) so the plugin can stop it
+  // later; the record line must sit between the poll loop and the browser.
+  assert.match(cmd, /netstat -ano/)
+  assert.match(cmd, /server\.pid/)
+  const recordIndex = cmd.indexOf('netstat -ano')
   const loopIndex = cmd.indexOf('goto loop')
   const openIndex = cmd.indexOf('start ""')
-  assert.ok(loopIndex >= 0 && openIndex > loopIndex, 'browser must open only after the poll loop')
+  assert.ok(loopIndex >= 0 && recordIndex > loopIndex && openIndex > recordIndex,
+    'PID recording must run after the poll loop (spawn path) and before the browser')
 })
 
 test('launcher script: POSIX .sh polls with curl before opening the browser', async (t) => {
@@ -78,4 +83,7 @@ test('launcher script: POSIX .sh polls with curl before opening the browser', as
   assert.match(script, /api\/events\.mux/)
   assert.match(script, /while \[ \$i -lt 120 \]/)
   assert.match(script, /curl -sf/)
+  // The spawn path records the server PID (lsof) for a later adopted-stop.
+  assert.match(script, /lsof -nP -tiTCP:3080 -sTCP:LISTEN/)
+  assert.match(script, /server\.pid/)
 })

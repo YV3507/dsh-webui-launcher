@@ -30,9 +30,9 @@ dsh plugin --profile web add .
 
 ## 行为与健壮性
 
-- **接管或启动**：端口上已有服务器时只接管——不重启、绝不停止。`webui_stop` 只终止本插件 spawn 的进程树。
+- **接管或启动**：端口上已有服务器时只接管——不重启、绝不停止。`webui_stop` 终止本插件 spawn 的进程树，也会终止**桌面启动器（或上一插件实例）记录过 PID 的接管服务器**（记录 PID 与当前监听进程一致才停，且杀前仍做 node.exe 身份核验）；未记录 PID 的外部服务器绝不动。
 - **显式状态机**：`idle → starting → running → stopping`，单飞串行化——并发 `start`/`stop` 永不交错。
-- **孤儿清理**：插件卸载或热重载时，停止其 spawn 的服务器（`ctx.effect` dispose）。
+- **孤儿清理**：插件卸载或热重载时，停止其 spawn 的服务器，以及记录过 PID 的启动器服务器（`ctx.effect` dispose）。
 - **PID 身份防护**：杀进程前重新核验（存活、仍是本插件子进程，Windows 下经 tasklist 确认仍是 node.exe），绝不动被复用的 PID。
 - **中止/超时卫生**：被中止或超时的 start 会杀掉自己 spawn 的子进程，并在错误信息中带上输出尾部。
 - **CLI 定位兜底链**：当前运行中的 CLI（`process.argv[1]`）→ `@deepseek-ai/dsh` 包 → 显式 `cliBin` 配置；找不到时报可操作错误。

@@ -31,3 +31,19 @@ test('process: a failed spawn is surfaced as an exited server with the error log
   // Nothing was spawned, so a kill attempt is trivially "stopped".
   assert.equal(await server.kill(), true)
 })
+
+test('process: parseNetstatPid extracts the LISTENING pid for a port', async () => {
+  const plugin = await loadPlugin()
+  const out = [
+    '  Proto  Local Address          Foreign Address        State           PID',
+    '  TCP    127.0.0.1:3080         0.0.0.0:0              LISTENING       30936',
+    '  TCP    127.0.0.1:4000         0.0.0.0:0              LISTENING       9999',
+    '  TCP    127.0.0.1:55555        0.0.0.0:0              LISTENING       7777',
+  ].join('\r\n')
+
+  assert.equal(plugin.parseNetstatPid(out, 3080), 30936)
+  assert.equal(plugin.parseNetstatPid(out, 4000), 9999)
+  // A port that is a numeric prefix of another must not match (5555 vs 55555).
+  assert.equal(plugin.parseNetstatPid(out, 5555), null)
+  assert.equal(plugin.parseNetstatPid(out, 1), null)
+})

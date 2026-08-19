@@ -22,9 +22,10 @@
  * targets the `SpawnedServer` this instance spawned.
  */
 
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { openBrowser as defaultOpenBrowser } from './browser.ts'
 import { resolveCli as defaultResolveCli, type ResolvedCli } from './cli.ts'
-import { spawnServer as defaultSpawnServer, type SpawnedServer } from './process.ts'
+import { killPidTree as defaultKillPidTree, pidForPort as defaultPidForPort, spawnServer as defaultSpawnServer, type SpawnedServer } from './process.ts'
 import { probeApiReady as defaultProbeApiReady, probeHttpReady as defaultProbeHttpReady, probeListening as defaultProbeListening } from './probe.ts'
 
 export interface WebUiOptions {
@@ -40,6 +41,12 @@ export interface WebUiOptions {
   openBrowserOnStart: boolean
   /** Bound on the retained tail of the spawned server's output. */
   maxLogLines: number
+  /** PID-record file for launcher-started servers ("" = disabled). The
+   * desktop launcher (and this runtime's own spawn) write the server PID
+   * here; `stop()` only stops an adopted server when the recorded PID is the
+   * one currently listening — so servers the launcher started are closable,
+   * while genuinely foreign servers stay untouched. */
+  adoptedPidFile: string
 }
 
 /** The runtime's lifecycle state, surfaced in status. */
@@ -82,6 +89,12 @@ export interface WebUiRuntimeDeps {
   probeApiReady(url: string): Promise<boolean>
   resolveCli(): ResolvedCli
   spawnServer(cli: ResolvedCli, host: string, port: number): SpawnedServer
+  /** The PID currently listening on host:port, or null. */
+  pidForPort(host: string, port: number): Promise<number | null>
+  /** Identity-guarded tree-kill of an arbitrary PID (node.exe only on win32). */
+  killPidTree(pid: number): Promise<boolean>
+  /** Record a spawned server's PID for a later instance's adopted-stop. */
+  recordSpawnedPid(pid: number): void
   openBrowser(url: string): Promise<boolean>
   sleep(ms: number): Promise<void>
   now(): number
@@ -100,6 +113,16 @@ export function defaultDeps(options: WebUiOptions): WebUiRuntimeDeps {
       cwd: cli.cwd,
       maxLogLines: options.maxLogLines,
     }),
+    pidForPort: (host, port) => defaultPidForPort(host, port),
+    killPidTree: (pid) => defaultKillPidTree(pid),
+    recordSpawnedPid: (pid) => {
+      if (options.adoptedPidFile === '') return
+      try {
+        writeFileSync(options.adoptedPidFile, String(pid), 'utf8')
+      } catch {
+        /* best-effort: the adopted-stop just degrades to a refuse */
+      }
+    },
     openBrowser: (url) => defaultOpenBrowser(url),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
@@ -195,6 +218,7 @@ export class WebUiRuntime {
       const cli = this.deps.resolveCli()
       const server = this.deps.spawnServer(cli, this.options.host, this.options.port)
       this.server = server
+      this.deps.recordSpawnedPid(server.pid)
       this.state = 'starting'
       const startedAt = this.deps.now()
       let attempt = 0
@@ -253,12 +277,23 @@ export class WebUiRuntime {
   }
 
   /**
-   * Stop the server this runtime spawned. An adopted server is never stopped.
+   * Stop the web server. A server this runtime spawned is always stopped; an
+   * adopted server is stopped only when the desktop launcher (or an earlier
+   * plugin instance) recorded its PID and that PID is the one currently
+   * listening — a genuinely foreign server is never touched.
    */
   async stop(): Promise<WebUiResult> {
     return this.serialized(async () => {
       if (this.server === null) {
+        const adopted = await this.stopAdoptedIfOurs()
+        this.state = 'idle'
         const status = await this.status()
+        if (adopted.stopped) {
+          return { status, message: `stopped the Web UI server started by the launcher (pid ${adopted.pid})` }
+        }
+        if (adopted.pid !== null) {
+          return { status, message: `launcher server pid ${adopted.pid} still running after kill attempts` }
+        }
         return { status, message: 'nothing to stop: this plugin spawned no server' }
       }
       if (this.server.exitCode() !== null) {
@@ -304,8 +339,40 @@ export class WebUiRuntime {
       } else {
         this.server = null
         this.state = 'idle'
+        // The desktop launcher's server is also ours in spirit — clean it up
+        // too (PID-recorded, identity-guarded).
+        await this.stopAdoptedIfOurs()
       }
     })
+  }
+
+  /**
+   * Stop an adopted server that this plugin's launcher (or an earlier plugin
+   * instance) spawned: the recorded PID file must name the process currently
+   * listening on the port. Returns whether a server was stopped and the PID
+   * it targeted (null = nothing matched, so nothing was attempted).
+   */
+  private async stopAdoptedIfOurs(): Promise<{ stopped: boolean; pid: number | null }> {
+    const file = this.options.adoptedPidFile
+    if (file === '' || !existsSync(file)) return { stopped: false, pid: null }
+    let recorded = NaN
+    try {
+      recorded = Number(readFileSync(file, 'utf8').trim())
+    } catch {
+      return { stopped: false, pid: null }
+    }
+    if (!Number.isInteger(recorded) || recorded <= 0) return { stopped: false, pid: null }
+    const current = await this.deps.pidForPort(this.options.host, this.options.port)
+    if (current !== recorded) return { stopped: false, pid: null }
+    let stopped = await this.deps.killPidTree(recorded)
+    if (!stopped) {
+      // taskkill /F can lag a moment before the OS reaps the process; the
+      // port is the real signal — if it no longer answers on the recorded
+      // PID, the server is gone regardless of what the pid-watcher reported.
+      const still = await this.deps.pidForPort(this.options.host, this.options.port)
+      if (still === null || still !== recorded) stopped = true
+    }
+    return { stopped, pid: recorded }
   }
 
   /** Clear the server reference and stop it; resolves whether it is gone. */

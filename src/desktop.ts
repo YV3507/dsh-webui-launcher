@@ -93,6 +93,11 @@ export function writeLauncherScript(managedDir: string, spec: LauncherSpec): str
   // would exit 1 when ready and loop forever. `%%` is cmd's literal-percent
   // escape so curl's `%{http_code}` survives the batch file.
   const poll = `>nul 2>&1 powershell -NoProfile -Command "$r = 0; $w = 0; try { $r = curl.exe -s -o NUL -w '%%{http_code}' --max-time 2 '${spec.url}/' } catch { }; try { $w = curl.exe -s -o NUL -w '%%{http_code}' --max-time 2 '${spec.url}/api/events.mux' } catch { }; exit (($r -ne '200') -or ($w -ne '426'))"`
+  // Port the launcher's server listens on — used to record its PID so the
+  // plugin can stop it later. Only recorded on the SPAWN path: the
+  // already-serving path must never claim a foreign server's PID.
+  const port = new URL(spec.url).port
+  const pidFile = join(managedDir, 'server.pid')
   if (process.platform === 'win32') {
     const path = join(managedDir, 'launch.cmd')
     const vbsPath = join(managedDir, 'launch-server.vbs')
@@ -117,6 +122,10 @@ export function writeLauncherScript(managedDir: string, spec: LauncherSpec): str
       ':loop',
       poll,
       'if errorlevel 1 ( timeout /t 1 /nobreak >nul & goto loop )',
+      // We spawned and the server is ready: record its PID (netstat's last
+      // LISTENING column) so the plugin's stop() can close it later.
+      `for /f "tokens=5" %%p in ('netstat -ano ^| findstr /c:":${port} " ^| findstr "LISTENING"') do set DSH_SRVPID=%%p`,
+      `if defined DSH_SRVPID echo %DSH_SRVPID%>"${shQuote(pidFile)}"`,
       ':open',
       `start "" "${spec.url}"`,
       'endlocal',
@@ -144,6 +153,9 @@ export function writeLauncherScript(managedDir: string, spec: LauncherSpec): str
     '  sleep 1',
     '  i=$((i+1))',
     'done',
+    // Record the spawned server's PID (spawn path only) so the plugin can
+    // stop it later; an empty file (no lsof) simply disables that.
+    `lsof -nP -tiTCP:${port} -sTCP:LISTEN 2>/dev/null | head -n 1 > "${shQuote(pidFile)}"`,
     `${opener} "${spec.url}" >/dev/null 2>&1 &`,
     '',
   ].join('\n'), 'utf8')
