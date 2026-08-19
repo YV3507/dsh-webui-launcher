@@ -18,6 +18,8 @@ export interface WebUiStatus {
   ready: boolean
   spawned: boolean
   adopted: boolean
+  /** stop() can close the current server (spawned, or launcher-recorded). */
+  stoppable: boolean
   pid: number | null
   exitCode: number | null
   logs: string[]
@@ -162,7 +164,9 @@ export function WebUISection({ t }: WebUiSectionProps) {
     : translate('unknown')
   const dotColor = status?.ready ? '#3fb950' : status?.listening ? '#d29922' : '#8b949e'
   const startDisabled = busy || (status?.listening ?? false)
-  const stopDisabled = busy || !(status?.spawned ?? false)
+  // Stop is enabled whenever the host can actually close the server: our own
+  // spawned child, or a launcher-recorded adopted server (status.stoppable).
+  const stopDisabled = busy || !(status?.stoppable ?? false)
   const openDisabled = busy || !(status?.listening ?? false)
 
   return (
@@ -174,7 +178,9 @@ export function WebUISection({ t }: WebUiSectionProps) {
         {status?.url ? <span style={styles.muted}>{status.url}</span> : null}
       </div>
       {status?.spawned ? <p style={styles.muted}>{translate('spawned')} (pid {status.pid})</p> : null}
-      {status?.adopted ? <p style={styles.muted}>{translate('adopted')}</p> : null}
+      {status?.adopted
+        ? <p style={styles.muted}>{status.stoppable ? translate('adoptedLauncher') : translate('adopted')}</p>
+        : null}
       <div style={{ display: 'flex', gap: 8, margin: '10px 0' }}>
         <button type="button" style={styles.button} disabled={startDisabled} onClick={() => void run('start')}>
           {busy ? translate('busy') : translate('start')}

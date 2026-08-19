@@ -1,0 +1,11 @@
+fix: settings card enables Stop for launcher-recorded adopted servers
+
+The 0.1.9 runtime could already close launcher-started servers (PID-record
+match), but the Settings card disabled its Stop button whenever
+`status.spawned` was false — which is exactly the launcher-server case — so
+"close all webui" still appeared broken.
+
+- status now reports `stoppable` (spawned, or adopted with a matching
+  launcher PID record); the card enables Stop on that instead of `spawned`
+- the adopted line distinguishes "launcher-started, can be stopped" from a
+  genuinely foreign server

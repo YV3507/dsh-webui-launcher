@@ -67,6 +67,8 @@ export interface WebUiStatus {
   spawned: boolean
   /** A server was already listening, so this instance owns nothing. */
   adopted: boolean
+  /** stop() can close the current server (spawned, or launcher-recorded). */
+  stoppable: boolean
   /** PID of the spawned server, when spawned and alive. */
   pid: number | null
   /** Exit code of the spawned server, once it exited. */
@@ -168,6 +170,11 @@ export class WebUiRuntime {
       ? (await this.deps.probeHttpReady(this.url)) && (await this.deps.probeApiReady(this.url))
       : false
     const spawned = this.server !== null && this.server.exitCode() === null
+    const adopted = listening && this.server === null
+    // Whether stop() can actually close the current server: our own spawned
+    // child, or an adopted launcher-recorded server (PID match). The settings
+    // card enables Stop only on this.
+    const stoppable = spawned || (adopted && (await this.adoptedPidMatch()) !== null)
     return {
       port: this.options.port,
       host: this.options.host,
@@ -176,7 +183,8 @@ export class WebUiRuntime {
       listening,
       ready,
       spawned,
-      adopted: listening && this.server === null,
+      adopted,
+      stoppable,
       pid: spawned ? this.server!.pid : null,
       exitCode: this.server?.exitCode() ?? null,
       logs: this.server?.logs() ?? [],
@@ -347,23 +355,32 @@ export class WebUiRuntime {
   }
 
   /**
-   * Stop an adopted server that this plugin's launcher (or an earlier plugin
-   * instance) spawned: the recorded PID file must name the process currently
-   * listening on the port. Returns whether a server was stopped and the PID
-   * it targeted (null = nothing matched, so nothing was attempted).
+   * The launcher-recorded server PID when it matches the process currently
+   * listening on the port — the provenance proof that the adopted server is
+   * ours to stop — or null when there is no record / no match.
    */
-  private async stopAdoptedIfOurs(): Promise<{ stopped: boolean; pid: number | null }> {
+  private async adoptedPidMatch(): Promise<number | null> {
     const file = this.options.adoptedPidFile
-    if (file === '' || !existsSync(file)) return { stopped: false, pid: null }
+    if (file === '' || !existsSync(file)) return null
     let recorded = NaN
     try {
       recorded = Number(readFileSync(file, 'utf8').trim())
     } catch {
-      return { stopped: false, pid: null }
+      return null
     }
-    if (!Number.isInteger(recorded) || recorded <= 0) return { stopped: false, pid: null }
+    if (!Number.isInteger(recorded) || recorded <= 0) return null
     const current = await this.deps.pidForPort(this.options.host, this.options.port)
-    if (current !== recorded) return { stopped: false, pid: null }
+    return current === recorded ? recorded : null
+  }
+
+  /**
+   * Stop an adopted server that this plugin's launcher (or an earlier plugin
+   * instance) spawned. Returns whether a server was stopped and the PID it
+   * targeted (null = nothing matched, so nothing was attempted).
+   */
+  private async stopAdoptedIfOurs(): Promise<{ stopped: boolean; pid: number | null }> {
+    const recorded = await this.adoptedPidMatch()
+    if (recorded === null) return { stopped: false, pid: null }
     let stopped = await this.deps.killPidTree(recorded)
     if (!stopped) {
       // taskkill /F can lag a moment before the OS reaps the process; the

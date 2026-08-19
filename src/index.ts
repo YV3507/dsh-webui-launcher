@@ -107,6 +107,7 @@ const output = {
           ready: { type: 'boolean', required: true },
           spawned: { type: 'boolean', required: true },
           adopted: { type: 'boolean', required: true },
+          stoppable: { type: 'boolean', required: true },
           pid: { type: 'number' },
           exitCode: { type: 'number' },
         },

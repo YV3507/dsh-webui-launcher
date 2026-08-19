@@ -226,6 +226,39 @@ test('runtime: an adopted stop stays "still running" when the port still has the
   assert.match(result.message, /still running after kill attempts/)
 })
 
+test('runtime: status exposes stoppable for a launcher-recorded adopted server', async (t) => {
+  const plugin = await loadPlugin()
+  const root = mkdtempSync(join(tmpdir(), 'dsh-webui-pidfile-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const pidFile = join(root, 'server.pid')
+  writeFileSync(pidFile, '4242\n')
+  const { deps } = fakeDeps({
+    probeListening: async () => true,
+    pidForPort: async () => 4242,
+  })
+  const rt = new plugin.WebUiRuntime({ ...baseOptions(), adoptedPidFile: pidFile }, deps)
+
+  const status = await rt.status()
+
+  assert.equal(status.adopted, true)
+  assert.equal(status.spawned, false)
+  assert.equal(status.stoppable, true)
+})
+
+test('runtime: status reports an adopted server without a PID record as not stoppable', async (t) => {
+  const plugin = await loadPlugin()
+  const { deps } = fakeDeps({
+    probeListening: async () => true,
+    pidForPort: async () => 4242,
+  })
+  const rt = new plugin.WebUiRuntime(baseOptions(), deps) // adoptedPidFile ''
+
+  const status = await rt.status()
+
+  assert.equal(status.adopted, true)
+  assert.equal(status.stoppable, false)
+})
+
 test('runtime: start records the spawned server PID for a later adopted-stop', async () => {
   const plugin = await loadPlugin()
   let recorded = null
