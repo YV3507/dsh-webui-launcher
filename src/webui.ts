@@ -160,11 +160,23 @@ export class WebUiRuntime {
   async start(signal: AbortSignal): Promise<WebUiResult> {
     return this.serialized(async () => {
       if (this.state === 'starting') {
-        throw new Error('webui.start: another start is already in progress')
+        throw new Error('webui_start: another start is already in progress')
       }
       if (this.state === 'running' && this.server !== null) {
         const status = await this.status()
-        return { status, message: `Web UI ready at ${this.url} (pid ${status.pid})` }
+        // The spawned server may have died since it became ready; never claim
+        // "ready" without the probes agreeing.
+        let message: string
+        if (status.listening && status.ready) {
+          message = `Web UI ready at ${this.url}${status.spawned && status.pid ? ` (pid ${status.pid})` : ''}`
+        } else if (status.listening) {
+          message = `Web UI listening at ${this.url} but not answering HTTP 200 yet`
+        } else if (status.exitCode !== null) {
+          message = `the Web UI server exited (code ${status.exitCode}); nothing serving ${this.url}`
+        } else {
+          message = `nothing serving ${this.url}`
+        }
+        return { status, message }
       }
       if (await this.deps.probeListening(this.options.host, this.options.port)) {
         this.state = 'running'
@@ -183,7 +195,7 @@ export class WebUiRuntime {
         for (;;) {
           if (signal.aborted) {
             await this.stopSpawned()
-            throw new Error('webui.start aborted')
+            throw new Error('webui_start aborted')
           }
           const exited = server.exitCode()
           if (exited !== null) {
@@ -251,6 +263,11 @@ export class WebUiRuntime {
       const pid = this.server.pid
       this.state = 'stopping'
       const stopped = await this.stopSpawned()
+      // A failed kill leaves the server alive: keep it manageable so a later
+      // stop/dispose can retry, and surface the truth in status.
+      if (!stopped && this.server !== null && this.server.exitCode() === null) {
+        this.state = 'running'
+      }
       const status = await this.status()
       return stopped
         ? { status, message: `stopped the Web UI server (pid ${pid})` }
@@ -262,7 +279,7 @@ export class WebUiRuntime {
   async open(): Promise<WebUiResult> {
     const status = await this.status()
     if (!status.listening) {
-      return { status, message: `nothing serving ${this.url} — run webui.start first` }
+      return { status, message: `nothing serving ${this.url} \u2014 run webui_start first` }
     }
     const opened = await this.deps.openBrowser(this.url)
     return opened
@@ -285,9 +302,18 @@ export class WebUiRuntime {
   /** Clear the server reference and stop it; resolves whether it is gone. */
   private async stopSpawned(): Promise<boolean> {
     const server = this.server
-    this.server = null
-    this.state = 'idle'
-    if (server === null) return true
-    return server.kill()
+    if (server === null) {
+      this.state = 'idle'
+      return true
+    }
+    const stopped = await server.kill()
+    if (stopped) {
+      this.server = null
+      this.state = 'idle'
+    }
+    // On a failed kill the reference is deliberately kept: dropping it would
+    // orphan a possibly-still-running server that a later stop/dispose could
+    // have retried. State transitions on failure are left to the caller.
+    return stopped
   }
 }

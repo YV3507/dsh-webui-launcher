@@ -6,6 +6,7 @@
  */
 
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import http from 'node:http'
 import test from 'node:test'
 import { loadPlugin, makeContext } from './_helpers.mjs'
@@ -28,7 +29,7 @@ test('wiring: registers 4 tools, the /webui command, 5 routes and exports the ru
 
   const ctx = makeContext()
   plugin.apply(ctx, {})
-  assert.deepEqual(ctx.state.tools.map((t) => t.name).sort(), ['webui.open', 'webui.start', 'webui.status', 'webui.stop'])
+  assert.deepEqual(ctx.state.tools.map((t) => t.name).sort(), ['webui_open', 'webui_start', 'webui_status', 'webui_stop'])
   assert.deepEqual(ctx.state.commands.map((c) => c.name), ['webui'])
   assert.deepEqual(ctx.state.routes.map((r) => r.path).sort(), [
     '/webui/icon', '/webui/open', '/webui/start', '/webui/status', '/webui/stop',
@@ -89,4 +90,35 @@ test('runtime: status/start/stop against a live HTTP server on an ephemeral port
   })
   assert.equal(result.kind, 'success')
   assert.match(result.text, /Web UI/)
+})
+
+test('endpoints: an icon upload aborted mid-body settles without hanging', async () => {
+  const plugin = await loadPlugin()
+  const ctx = makeContext()
+  plugin.apply(ctx, { port: 9 })
+  const route = ctx.state.routes.find((r) => r.path === '/webui/icon')
+  assert.ok(route, 'the /webui/icon route must be registered')
+
+  // A real EventEmitter request that disconnects before the body completes:
+  // 'end' never fires, so readBody must settle via 'aborted' — otherwise the
+  // handler promise would never resolve and the route would hang.
+  const req = new EventEmitter()
+  req.method = 'POST'
+  req.headers = { origin: 'http://127.0.0.1:9' }
+  req.complete = false
+  let result
+  const res = {
+    statusCode: 0,
+    setHeader() {},
+    end(payload) {
+      result = JSON.parse(payload)
+    },
+  }
+
+  const done = route.handler(req, res)
+  req.emit('aborted') // client disconnects mid-upload
+  await done
+
+  assert.ok(result, 'the handler must settle on disconnect')
+  assert.equal(result.ok, false)
 })

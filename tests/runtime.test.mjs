@@ -89,7 +89,7 @@ test('runtime: start aborts and kills the spawned child', async () => {
   const controller = new AbortController()
   controller.abort()
 
-  await assert.rejects(() => rt.start(controller.signal), /webui\.start aborted/)
+  await assert.rejects(() => rt.start(controller.signal), /webui_start aborted/)
   assert.equal(calls.spawns, 1)
   assert.equal(calls.kills, 1)
 })
@@ -116,6 +116,44 @@ test('runtime: stop kills the spawned server and returns to idle', async () => {
   assert.equal(calls.kills, 1)
   assert.match(result.message, /stopped the Web UI server \(pid 4242\)/)
   assert.equal((await rt.status()).state, 'idle')
+})
+
+test('runtime: a failed kill keeps the server reference so a later stop can retry', async () => {
+  const plugin = await loadPlugin()
+  const { deps, calls, server } = fakeDeps({ probeListening: sequencedProbe([false, false, true]) })
+  server.kill = async () => {
+    calls.kills += 1
+    return false // the child survives the kill attempt
+  }
+  const rt = new plugin.WebUiRuntime(baseOptions(), deps)
+  await rt.start(new AbortController().signal)
+
+  const first = await rt.stop()
+  assert.equal(calls.kills, 1)
+  assert.match(first.message, /still running after kill attempts/)
+  // The reference must not be dropped: status still shows the live server.
+  const afterFirst = await rt.status()
+  assert.equal(afterFirst.spawned, true)
+  assert.equal(afterFirst.state, 'running')
+  assert.equal(afterFirst.pid, 4242)
+
+  // A second stop retries the kill instead of reporting "nothing to stop".
+  const second = await rt.stop()
+  assert.equal(calls.kills, 2)
+  assert.match(second.message, /still running after kill attempts/)
+})
+
+test('runtime: start while running but the server died reports the truth, not "ready"', async () => {
+  const plugin = await loadPlugin()
+  const { deps, server } = fakeDeps({ probeListening: sequencedProbe([false, false, true, true, false]) })
+  const rt = new plugin.WebUiRuntime(baseOptions(), deps)
+  await rt.start(new AbortController().signal)
+  server.die(0) // the child exits after becoming ready; nothing listens anymore
+
+  const result = await rt.start(new AbortController().signal)
+
+  assert.equal(result.status.ready, false)
+  assert.match(result.message, /exited \(code 0\); nothing serving/)
 })
 
 test('runtime: stop on an already-exited server reports it without killing', async () => {

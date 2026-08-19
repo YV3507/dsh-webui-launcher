@@ -61,12 +61,20 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body))
 }
 
-/** Read the request body as a string, bounded to prevent abuse. */
+/** Read the request body as a string, bounded to prevent abuse. Settles even
+ * when the client disconnects mid-body (no 'end' event): an aborted or errored
+ * request resolves to an empty body so the route never hangs. */
 function readBody(req: IncomingMessage, cap: number): Promise<string> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = []
     let bytes = 0
     let overflow = false
+    let settled = false
+    const done = (value: string): void => {
+      if (settled) return
+      settled = true
+      resolve(value)
+    }
     req.on('data', (chunk: Buffer) => {
       if (overflow) return
       bytes += chunk.length
@@ -77,7 +85,12 @@ function readBody(req: IncomingMessage, cap: number): Promise<string> {
       }
       chunks.push(chunk)
     })
-    req.on('end', () => resolve(overflow ? '' : Buffer.concat(chunks).toString('utf8')))
+    req.on('end', () => done(overflow ? '' : Buffer.concat(chunks).toString('utf8')))
+    req.on('error', () => done(''))
+    req.on('aborted', () => done(''))
+    req.on('close', () => {
+      if (!req.complete) done('')
+    })
   })
 }
 

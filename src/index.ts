@@ -1,7 +1,7 @@
 /**
  * dsh-webui-launcher, host half: a cross-platform controller for the DeepSeek
- * Harness Web UI. It registers model tools `webui.status` / `webui.start` /
- * `webui.stop` / `webui.open`, a `/webui start|stop|status|open` slash
+ * Harness Web UI. It registers model tools `webui_status` / `webui_start` /
+ * `webui_stop` / `webui_open`, a `/webui start|stop|status|open` slash
  * command, and the `/webui/*` JSON endpoints the browser half's Settings card
  * fetches. The heavy lifting lives in {@link WebUiRuntime} — the state-machine
  * core (adopt-or-start, readiness wait, PID-guarded stop, orphan cleanup on
@@ -14,10 +14,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { CommandDefinition } from '@deepseek-ai/dsh-commands'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import Schema from '@deepseek-ai/schemastery'
 import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 import { resolveCli } from './cli.ts'
 import { registerWebUiEndpoints, type IconUploadResult } from './endpoints.ts'
 import { convertImageToIcon } from './icon.ts'
@@ -33,6 +34,11 @@ export { ShortcutManager, defaultShortcutDeps, managedDirFor } from './shortcut.
 export type { ShortcutManagerDeps, ShortcutManagerOptions } from './shortcut.ts'
 export { convertImageToIcon, packIco } from './icon.ts'
 export type { IconSet } from './icon.ts'
+// Exported for the launcher-script/spawn tests (desktop .cmd polarity, spawn
+// failure fast-path).
+export { writeLauncherScript } from './desktop.ts'
+export { spawnServer } from './process.ts'
+export type { SpawnedServer, SpawnOptions } from './process.ts'
 export { detectDesktopDir } from './desktop.ts'
 export type { LauncherSpec, ShortcutHandle } from './desktop.ts'
 
@@ -84,27 +90,28 @@ interface WebUiToolValue {
 const output = {
   schema: {
     type: 'object',
+    additionalProperties: false,
     properties: {
-      ok: { type: 'boolean' },
-      message: { type: 'string' },
+      ok: { type: 'boolean', required: true },
+      message: { type: 'string', required: true },
       status: {
         type: 'object',
+        additionalProperties: true,
+        required: true,
         properties: {
-          port: { type: 'number' },
-          host: { type: 'string' },
-          url: { type: 'string' },
-          state: { type: 'string' },
-          listening: { type: 'boolean' },
-          ready: { type: 'boolean' },
-          spawned: { type: 'boolean' },
-          adopted: { type: 'boolean' },
+          port: { type: 'number', required: true },
+          host: { type: 'string', required: true },
+          url: { type: 'string', required: true },
+          state: { type: 'string', required: true },
+          listening: { type: 'boolean', required: true },
+          ready: { type: 'boolean', required: true },
+          spawned: { type: 'boolean', required: true },
+          adopted: { type: 'boolean', required: true },
           pid: { type: 'number' },
           exitCode: { type: 'number' },
         },
-        required: ['port', 'host', 'url', 'state', 'listening', 'ready', 'spawned', 'adopted'],
       },
     },
-    required: ['ok', 'message', 'status'],
   },
   render: (_args: Record<string, unknown>, value: WebUiToolValue) => [
     { type: 'text' as const, text: value.message },
@@ -115,7 +122,7 @@ const output = {
 function buildTools(runtime: WebUiRuntime) {
   return [
     defineTool({
-      name: 'webui.status',
+      name: 'webui_status',
       description: 'Report whether the DeepSeek Harness Web UI is listening and ready on host:port.',
       parameters: {},
       output,
@@ -131,7 +138,7 @@ function buildTools(runtime: WebUiRuntime) {
       },
     }),
     defineTool({
-      name: 'webui.start',
+      name: 'webui_start',
       description:
         'Start the DeepSeek Harness Web UI: adopts a server already listening on the port, otherwise spawns `dsh --profile web` in the background and waits until it answers HTTP 200.',
       parameters: {},
@@ -142,7 +149,7 @@ function buildTools(runtime: WebUiRuntime) {
       },
     }),
     defineTool({
-      name: 'webui.stop',
+      name: 'webui_stop',
       description:
         'Stop the Web UI server this plugin spawned. A server this plugin did not start (adopted) is never stopped.',
       parameters: {},
@@ -153,7 +160,7 @@ function buildTools(runtime: WebUiRuntime) {
       },
     }),
     defineTool({
-      name: 'webui.open',
+      name: 'webui_open',
       description: 'Open the default browser on the Web UI URL without starting or stopping anything.',
       parameters: {},
       output,
@@ -209,6 +216,19 @@ function buildCommand(runtime: WebUiRuntime): CommandDefinition {
   }
 }
 
+/** Resolve the bundled dsh default icon (the dsh web favicon, rasterized at
+ * build time into assets/), or '' when the asset is absent (partial install).
+ * Windows shortcuts need an .ico; Linux .desktop entries take a .png. */
+function bundledDshIcon(): string {
+  try {
+    const dir = fileURLToPath(new URL('../assets/', import.meta.url))
+    const file = join(dir, process.platform === 'win32' ? 'dsh-icon.ico' : 'dsh-icon.png')
+    return existsSync(file) ? file : ''
+  } catch {
+    return ''
+  }
+}
+
 /** Load the runtime, register tools/commands/routes, and release them with the fiber. */
 export function apply(ctx: Context, config: Partial<Config> | undefined): void {
   const options = {
@@ -225,6 +245,22 @@ export function apply(ctx: Context, config: Partial<Config> | undefined): void {
   // launcher spec reuses the same CLI resolution as the runtime's spawn;
   // resolution failure degrades the shortcut feature only (never the boot).
   const managedDir = managedDirFor()
+  // Default shortcut icon: the bundled dsh icon, copied into the persistent
+  // managed dir so a node_modules reinstall never orphans the .lnk's icon.
+  // An explicit `shortcutIconPath` config wins; an unavailable asset degrades
+  // to the platform-default icon.
+  let defaultIcon = ''
+  try {
+    const bundled = bundledDshIcon()
+    if (bundled !== '') {
+      mkdirSync(managedDir, { recursive: true })
+      const dest = join(managedDir, process.platform === 'win32' ? 'dsh-icon.ico' : 'dsh-icon.png')
+      if (!existsSync(dest)) copyFileSync(bundled, dest)
+      defaultIcon = dest
+    }
+  } catch (error) {
+    console.log(`[dsh-webui-launcher] default icon unavailable: ${error instanceof Error ? error.message : String(error)}`)
+  }
   let shortcut: ShortcutManager | null = null
   try {
     const cli = resolveCli(options.cliBin)
@@ -238,7 +274,7 @@ export function apply(ctx: Context, config: Partial<Config> | undefined): void {
     shortcut = new ShortcutManager({
       desktopShortcut: config?.desktopShortcut ?? true,
       shortcutName: config?.shortcutName ?? 'DeepSeek Harness Web UI',
-      shortcutIconPath: config?.shortcutIconPath ?? '',
+      shortcutIconPath: config?.shortcutIconPath ?? defaultIcon,
       managedDir,
       spec,
     }, defaultShortcutDeps())

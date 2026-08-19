@@ -20,16 +20,17 @@ dsh plugin --profile web add .
 
 ## 提供的能力
 
-- 模型工具 `webui.status` / `webui.start` / `webui.stop` / `webui.open`——后台启动 Web UI（spawn `dsh --profile web`）、等待 HTTP 200、查询或停止、打开默认浏览器。
+- 模型工具 `webui_status` / `webui_start` / `webui_stop` / `webui_open`——后台启动 Web UI（spawn `dsh --profile web`）、等待 HTTP 200、查询或停止、打开默认浏览器。
 - `/webui start|stop|status|open` 斜杠命令。
 - Web UI 设置页上的「Web UI 启动器」卡片（浏览器半，`exports["./client"]`），驱动同一组 `/webui/*` JSON 端点。
 - **桌面快捷方式**：首次启动插件时在桌面自动创建启动器快捷方式（Windows `.lnk` / Linux `.desktop` / macOS `.command`），双击后启动 Web UI 并在就绪时打开浏览器。无头主机（无桌面、无 DISPLAY）会静默跳过——插件在服务器上绝不会因此崩溃。可用 `desktopShortcut: false` 关闭。
-- **自定义快捷方式图标**：在设置卡片上传任意图片（PNG/JPEG/BMP/GIF/TIFF），自动转换（Windows 生成多尺寸 `.ico`，Linux 生成 `.png`）并立即更新已有快捷方式的图标；若尚未创建快捷方式（无头/已禁用），转换后的图标仍会保存，供将来创建时使用。
-- 插件配置：`port`（默认 3080）、`host`（127.0.0.1）、`cliBin`（"" = 复用当前运行的 CLI）、`startupTimeoutMs`（120000）、`openBrowserOnStart`（true）、`desktopShortcut`（true）、`shortcutName`（"DeepSeek Harness Web UI"）、`shortcutIconPath`（"" = 快捷方式的显式图标图片）。
+- **默认图标为 dsh 图标**：快捷方式默认使用 dsh 的官方图标（Web 应用 favicon 光栅化并内置在插件 `assets/` 中；Windows 用 `.ico`、Linux 用 `.png`）。图标被复制到持久化状态目录，重装插件不会丢失。
+- **自定义快捷方式图标**：在设置卡片上传任意图片（PNG/JPEG/BMP/GIF/TIFF），自动转换（Windows 生成多尺寸 `.ico`，Linux 生成 `.png`）并立即更新已有快捷方式的图标；若尚未创建快捷方式（无头/已禁用），转换后的图标仍会保存，供将来创建时使用。显式配置 `shortcutIconPath` 可覆盖默认图标。
+- 插件配置：`port`（默认 3080）、`host`（127.0.0.1）、`cliBin`（"" = 复用当前运行的 CLI）、`startupTimeoutMs`（120000）、`openBrowserOnStart`（true）、`desktopShortcut`（true）、`shortcutName`（"DeepSeek Harness Web UI"）、`shortcutIconPath`（"" = 使用内置的 dsh 默认图标；显式路径可自定义）。
 
 ## 行为与健壮性
 
-- **接管或启动**：端口上已有服务器时只接管——不重启、绝不停止。`webui.stop` 只终止本插件 spawn 的进程树。
+- **接管或启动**：端口上已有服务器时只接管——不重启、绝不停止。`webui_stop` 只终止本插件 spawn 的进程树。
 - **显式状态机**：`idle → starting → running → stopping`，单飞串行化——并发 `start`/`stop` 永不交错。
 - **孤儿清理**：插件卸载或热重载时，停止其 spawn 的服务器（`ctx.effect` dispose）。
 - **PID 身份防护**：杀进程前重新核验（存活、仍是本插件子进程，Windows 下经 tasklist 确认仍是 node.exe），绝不动被复用的 PID。

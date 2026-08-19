@@ -63,13 +63,25 @@ export function spawnServer(options: SpawnOptions): SpawnedServer {
     windowsHide: true,
   })
   const log = new LineLog(options.maxLogLines ?? 25)
+  // A failed spawn (missing CLI, unresolvable tsx import) never sets
+  // child.exitCode. Capture it so the runtime fails fast with the real error
+  // instead of waiting out the full startup timeout.
+  let spawnError: Error | null = null
+  child.once('error', (error: Error) => {
+    spawnError = error
+    log.push(Buffer.from(`spawn failed: ${error.message}`, 'utf8'))
+  })
   child.stdout?.on('data', (chunk: Buffer) => log.push(chunk))
   child.stderr?.on('data', (chunk: Buffer) => log.push(chunk))
+  // Pipe errors on a dead child must never surface as an unhandled 'error'
+  // event on the host; the log tail already reflects the child's fate.
+  child.stdout?.on('error', () => {})
+  child.stderr?.on('error', () => {})
   return {
     get pid() {
       return child.pid ?? 0
     },
-    exitCode: () => child.exitCode,
+    exitCode: () => spawnError !== null ? -1 : child.exitCode,
     kill: () => killTree(child, log),
     logs: () => log.tail(),
   }
@@ -79,7 +91,8 @@ export function spawnServer(options: SpawnOptions): SpawnedServer {
 async function killTree(child: ChildProcess, log: LineLog): Promise<boolean> {
   if (child.exitCode !== null) return true
   const pid = child.pid
-  if (pid === undefined) return false
+  // A child that never spawned (spawn 'error') has nothing to kill.
+  if (pid === undefined) return true
 
   if (process.platform === 'win32') {
     if (!(await looksLikeNode(pid))) {

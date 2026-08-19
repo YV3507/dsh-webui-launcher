@@ -16,8 +16,8 @@
  */
 
 import { execFile } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 
@@ -76,7 +76,7 @@ function shQuote(value: string): string {
 }
 
 /** Generate the poll-until-ready launcher script into the managed dir. */
-function writeLauncherScript(managedDir: string, spec: LauncherSpec): string {
+export function writeLauncherScript(managedDir: string, spec: LauncherSpec): string {
   mkdirSync(managedDir, { recursive: true })
   const args = spec.cliArgs.map(shQuote).join(' ')
   const commandLine = `"${shQuote(spec.command)}" ${args}`
@@ -87,7 +87,11 @@ function writeLauncherScript(managedDir: string, spec: LauncherSpec): string {
       'setlocal',
       `start "DeepSeek Harness Web UI" /min ${commandLine}`,
       ':loop',
-      `>nul 2>&1 powershell -NoProfile -Command "$r = try { (Invoke-WebRequest -UseBasicParsing -Uri '${spec.url}/' -TimeoutSec 2).StatusCode } catch { 0 }; exit ($r -eq 200)"`,
+      // exit 1 while the surface is NOT ready, so `if errorlevel 1` loops; the
+      // polarity must be `-ne 200` — `exit ($r -eq 200)` would exit 1 when the
+      // server IS ready ($true → 1), looping forever and never opening the
+      // browser, while opening it immediately when not ready ($false → 0).
+      `>nul 2>&1 powershell -NoProfile -Command "$r = try { (Invoke-WebRequest -UseBasicParsing -Uri '${spec.url}/' -TimeoutSec 2).StatusCode } catch { 0 }; exit ($r -ne 200)"`,
       'if errorlevel 1 ( timeout /t 1 /nobreak >nul & goto loop )',
       `start "" "${spec.url}"`,
       'endlocal',
@@ -171,7 +175,9 @@ export async function createShortcut(desktopDir: string, managedDir: string, spe
       'Version=1.0',
       `Name=${spec.name}`,
       `Comment=${spec.description}`,
-      `Exec=${launcher}`,
+      // Quote the launcher path: a DSH_HOME with spaces would otherwise split
+      // the Exec field and the desktop environment would fail to launch it.
+      `Exec="${launcher}"`,
       iconLine,
       'Terminal=false',
       'Categories=Network;',
@@ -188,9 +194,11 @@ export async function createShortcut(desktopDir: string, managedDir: string, spe
 export async function updateShortcutIcon(handle: ShortcutHandle, iconFile: string): Promise<boolean> {
   try {
     if (process.platform === 'win32') {
-      const managedDir = join(handle.path, '..')
-      const cfgPath = join(managedDir, 'icon-cfg.json')
-      const psPath = join(managedDir, 'update-icon.ps1')
+      // The cfg/ps1 are transient — write them to the system temp, never next
+      // to the .lnk (the Desktop), so an icon update leaves no litter behind.
+      const stamp = `${process.pid}-${Date.now()}`
+      const cfgPath = join(tmpdir(), `dsh-icon-cfg-${stamp}.json`)
+      const psPath = join(tmpdir(), `dsh-update-icon-${stamp}.ps1`)
       writeFileSync(cfgPath, JSON.stringify({ path: handle.path, icon: iconFile }), 'utf8')
       writeFileSync(psPath, [
         '$cfg = Get-Content -Raw -Encoding UTF8 $args[0] | ConvertFrom-Json',
@@ -200,7 +208,14 @@ export async function updateShortcutIcon(handle: ShortcutHandle, iconFile: strin
         '$s.Save()',
         '',
       ].join('\n'), 'utf8')
-      return await runPowerShell(psPath, cfgPath)
+      const ok = await runPowerShell(psPath, cfgPath)
+      try {
+        unlinkSync(cfgPath)
+        unlinkSync(psPath)
+      } catch {
+        /* best-effort cleanup */
+      }
+      return ok
     }
     if (process.platform === 'linux' && handle.path.endsWith('.desktop')) {
       const content = readFileSync(handle.path, 'utf8')

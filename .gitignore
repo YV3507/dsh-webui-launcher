@@ -2,3 +2,7 @@ node_modules/
 logs/
 *.log
 dist/
+# pnpm artifacts: this project installs with npm (see README); a pnpm lockfile
+# and the (broken) workspace file are incidental and must not be committed.
+pnpm-lock.yaml
+pnpm-workspace.yaml
