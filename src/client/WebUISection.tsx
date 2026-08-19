@@ -113,7 +113,7 @@ export function WebUISection({ t }: WebUiSectionProps) {
     }
   }, [])
 
-  const run = async (verb: 'start' | 'stop' | 'open'): Promise<void> => {
+  const run = async (verb: 'stop' | 'open'): Promise<void> => {
     setBusy(true)
     setError('')
     setMessage('')
@@ -123,6 +123,13 @@ export function WebUISection({ t }: WebUiSectionProps) {
     if (result.ok) {
       if (result.status) setStatus(result.status)
       setMessage(result.message ?? '')
+    } else if (verb === 'stop' || verb === 'open') {
+      // Stop on the launcher server kills the very process serving this
+      // request, so the response never arrives even though the action worked;
+      // some browsers also drop the open fetch cosmetically. Treat a failed
+      // fetch as the action having been dispatched — the status refresh below
+      // reveals the real state (a dead server for stop, still-served for open).
+      setMessage(verb === 'stop' ? translate('stopSent') : translate('openSent'))
     } else {
       setError(result.error ?? translate('unknown'))
     }
@@ -163,9 +170,10 @@ export function WebUISection({ t }: WebUiSectionProps) {
         : translate('notServing')
     : translate('unknown')
   const dotColor = status?.ready ? '#3fb950' : status?.listening ? '#d29922' : '#8b949e'
-  const startDisabled = busy || (status?.listening ?? false)
+  // The card is served by the web itself, so it is always listening — a Start
+  // button would never be usable here (start lives in the tools/command).
   // Stop is enabled whenever the host can actually close the server: our own
-  // spawned child, or a launcher-recorded adopted server (status.stoppable).
+  // spawned child, or the launcher-recorded adopted server (status.stoppable).
   const stopDisabled = busy || !(status?.stoppable ?? false)
   const openDisabled = busy || !(status?.listening ?? false)
 
@@ -182,9 +190,6 @@ export function WebUISection({ t }: WebUiSectionProps) {
         ? <p style={styles.muted}>{status.stoppable ? translate('adoptedLauncher') : translate('adopted')}</p>
         : null}
       <div style={{ display: 'flex', gap: 8, margin: '10px 0' }}>
-        <button type="button" style={styles.button} disabled={startDisabled} onClick={() => void run('start')}>
-          {busy ? translate('busy') : translate('start')}
-        </button>
         <button type="button" style={styles.button} disabled={stopDisabled} onClick={() => void run('stop')}>
           {translate('stop')}
         </button>

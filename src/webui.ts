@@ -23,6 +23,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import process from 'node:process'
 import { openBrowser as defaultOpenBrowser } from './browser.ts'
 import { resolveCli as defaultResolveCli, type ResolvedCli } from './cli.ts'
 import { killPidTree as defaultKillPidTree, pidForPort as defaultPidForPort, spawnServer as defaultSpawnServer, type SpawnedServer } from './process.ts'
@@ -93,9 +94,10 @@ export interface WebUiRuntimeDeps {
   spawnServer(cli: ResolvedCli, host: string, port: number): SpawnedServer
   /** The PID currently listening on host:port, or null. */
   pidForPort(host: string, port: number): Promise<number | null>
-  /** Identity-guarded tree-kill of an arbitrary PID (node.exe only on win32). */
-  killPidTree(pid: number): Promise<boolean>
-  /** Record a spawned server's PID for a later instance's adopted-stop. */
+  /** Defer an identity-guarded tree-kill (used for the self-stop, so the
+   * HTTP response flushes before the process dies). */
+  scheduleKill(pid: number): void
+  /** Record a spawned server's PID for a later adopted-stop. */
   recordSpawnedPid(pid: number): void
   openBrowser(url: string): Promise<boolean>
   sleep(ms: number): Promise<void>
@@ -116,7 +118,11 @@ export function defaultDeps(options: WebUiOptions): WebUiRuntimeDeps {
       maxLogLines: options.maxLogLines,
     }),
     pidForPort: (host, port) => defaultPidForPort(host, port),
-    killPidTree: (pid) => defaultKillPidTree(pid),
+    scheduleKill: (pid) => {
+      setTimeout(() => {
+        void defaultKillPidTree(pid).catch(() => {})
+      }, 800)
+    },
     recordSpawnedPid: (pid) => {
       if (options.adoptedPidFile === '') return
       try {
@@ -172,9 +178,9 @@ export class WebUiRuntime {
     const spawned = this.server !== null && this.server.exitCode() === null
     const adopted = listening && this.server === null
     // Whether stop() can actually close the current server: our own spawned
-    // child, or an adopted launcher-recorded server (PID match). The settings
-    // card enables Stop only on this.
-    const stoppable = spawned || (adopted && (await this.adoptedPidMatch()) !== null)
+    // child, or the launcher-recorded adopted server when it is this very
+    // process. The settings card enables Stop only on this.
+    const stoppable = spawned || (adopted && (await this.adoptedIsSelf()) !== null)
     return {
       port: this.options.port,
       host: this.options.host,
@@ -339,7 +345,10 @@ export class WebUiRuntime {
       : { status, message: `failed to open the default browser on ${this.url}` }
   }
 
-  /** Plugin-unload cleanup: stop the spawned server, if any (orphan guard). */
+  /** Plugin-unload cleanup: stop the spawned server, if any (orphan guard).
+   * The launcher server is deliberately NOT stopped here — stopping it would
+   * kill the very process the plugin runs in (a reload must not take the
+   * harness down); its stop belongs to the explicit stop() action. */
   async dispose(): Promise<void> {
     await this.serialized(async () => {
       if (this.server !== null && this.server.exitCode() === null) {
@@ -347,19 +356,18 @@ export class WebUiRuntime {
       } else {
         this.server = null
         this.state = 'idle'
-        // The desktop launcher's server is also ours in spirit — clean it up
-        // too (PID-recorded, identity-guarded).
-        await this.stopAdoptedIfOurs()
       }
     })
   }
 
   /**
-   * The launcher-recorded server PID when it matches the process currently
-   * listening on the port — the provenance proof that the adopted server is
-   * ours to stop — or null when there is no record / no match.
+   * The launcher-recorded server PID when it is this process itself — the
+   * only adopted server this runtime may stop. A PID record is shared state
+   * across dsh instances, so stopping anything but the current process would
+   * let one instance kill another's server (observed: a second profile-web
+   * instance on another port stopped the main harness).
    */
-  private async adoptedPidMatch(): Promise<number | null> {
+  private async adoptedIsSelf(): Promise<number | null> {
     const file = this.options.adoptedPidFile
     if (file === '' || !existsSync(file)) return null
     let recorded = NaN
@@ -368,28 +376,22 @@ export class WebUiRuntime {
     } catch {
       return null
     }
-    if (!Number.isInteger(recorded) || recorded <= 0) return null
+    if (!Number.isInteger(recorded) || recorded <= 0 || recorded !== process.pid) return null
     const current = await this.deps.pidForPort(this.options.host, this.options.port)
     return current === recorded ? recorded : null
   }
 
   /**
-   * Stop an adopted server that this plugin's launcher (or an earlier plugin
-   * instance) spawned. Returns whether a server was stopped and the PID it
-   * targeted (null = nothing matched, so nothing was attempted).
+   * Stop an adopted server — only ever the current process (the launcher
+   * server hosting this plugin). The kill is deferred so the HTTP response
+   * flushes before the process dies; otherwise the client sees the request
+   * dropped ("Failed to fetch") even though the stop worked.
    */
   private async stopAdoptedIfOurs(): Promise<{ stopped: boolean; pid: number | null }> {
-    const recorded = await this.adoptedPidMatch()
+    const recorded = await this.adoptedIsSelf()
     if (recorded === null) return { stopped: false, pid: null }
-    let stopped = await this.deps.killPidTree(recorded)
-    if (!stopped) {
-      // taskkill /F can lag a moment before the OS reaps the process; the
-      // port is the real signal — if it no longer answers on the recorded
-      // PID, the server is gone regardless of what the pid-watcher reported.
-      const still = await this.deps.pidForPort(this.options.host, this.options.port)
-      if (still === null || still !== recorded) stopped = true
-    }
-    return { stopped, pid: recorded }
+    this.deps.scheduleKill(recorded)
+    return { stopped: true, pid: recorded }
   }
 
   /** Clear the server reference and stop it; resolves whether it is gone. */

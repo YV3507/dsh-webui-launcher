@@ -132,26 +132,42 @@ test('runtime: stop without a spawned server says nothing to stop', async () => 
   assert.match(result.message, /nothing to stop/)
 })
 
-test('runtime: stop kills an adopted launcher server when the recorded PID matches', async (t) => {
+test('runtime: stop defers a self-kill for the launcher-recorded adopted server (this process)', async (t) => {
   const plugin = await loadPlugin()
   const root = mkdtempSync(join(tmpdir(), 'dsh-webui-pidfile-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const pidFile = join(root, 'server.pid')
-  writeFileSync(pidFile, '4242\n')
+  writeFileSync(pidFile, `${process.pid}\n`)
   const { deps, calls } = fakeDeps({
-    pidForPort: async () => 4242,
-    killPidTree: async () => {
-      calls.pidKills += 1
-      return true
+    pidForPort: async () => process.pid,
+    scheduleKill: () => {
+      calls.scheduledKills += 1
     },
   })
   const rt = new plugin.WebUiRuntime({ ...baseOptions(), adoptedPidFile: pidFile }, deps)
 
   const result = await rt.stop()
 
-  assert.equal(calls.pidKills, 1)
-  assert.match(result.message, /stopped the Web UI server started by the launcher \(pid 4242\)/)
+  assert.equal(calls.scheduledKills, 1)
+  assert.match(result.message, new RegExp(`stopped the Web UI server started by the launcher \\(pid ${process.pid}\\)`))
   assert.equal((await rt.status()).state, 'idle')
+})
+
+test('runtime: refuses to stop an adopted server recorded for ANOTHER process (cross-instance safety)', async (t) => {
+  const plugin = await loadPlugin()
+  const root = mkdtempSync(join(tmpdir(), 'dsh-webui-pidfile-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const pidFile = join(root, 'server.pid')
+  writeFileSync(pidFile, '999999\n') // another dsh instance's pid
+  const { deps, calls } = fakeDeps({
+    pidForPort: async () => 999999, // it is listening on the port
+  })
+  const rt = new plugin.WebUiRuntime({ ...baseOptions(), adoptedPidFile: pidFile }, deps)
+
+  const result = await rt.stop()
+
+  assert.equal(calls.scheduledKills, 0)
+  assert.match(result.message, /nothing to stop/)
 })
 
 test('runtime: refuses to stop an adopted server when the recorded PID does not match the listener', async (t) => {
@@ -159,7 +175,7 @@ test('runtime: refuses to stop an adopted server when the recorded PID does not 
   const root = mkdtempSync(join(tmpdir(), 'dsh-webui-pidfile-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const pidFile = join(root, 'server.pid')
-  writeFileSync(pidFile, '100\n')
+  writeFileSync(pidFile, `${process.pid}\n`)
   const { deps, calls } = fakeDeps({
     pidForPort: async () => 4242, // a different process is listening now
   })
@@ -167,7 +183,7 @@ test('runtime: refuses to stop an adopted server when the recorded PID does not 
 
   const result = await rt.stop()
 
-  assert.equal(calls.pidKills, 0)
+  assert.equal(calls.scheduledKills, 0)
   assert.match(result.message, /nothing to stop/)
 })
 
@@ -176,65 +192,25 @@ test('runtime: refuses to stop an adopted server without a PID record', async (t
   const root = mkdtempSync(join(tmpdir(), 'dsh-webui-pidfile-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const { deps, calls } = fakeDeps({
-    pidForPort: async () => 4242,
+    pidForPort: async () => process.pid,
   })
   const rt = new plugin.WebUiRuntime({ ...baseOptions(), adoptedPidFile: join(root, 'server.pid') }, deps)
 
   const result = await rt.stop()
 
-  assert.equal(calls.pidKills, 0)
+  assert.equal(calls.scheduledKills, 0)
   assert.match(result.message, /nothing to stop/)
 })
 
-test('runtime: an adopted stop is confirmed via the port when the pid-watcher lags', async (t) => {
+test('runtime: status exposes stoppable for the launcher-recorded self server', async (t) => {
   const plugin = await loadPlugin()
   const root = mkdtempSync(join(tmpdir(), 'dsh-webui-pidfile-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const pidFile = join(root, 'server.pid')
-  writeFileSync(pidFile, '4242\n')
-  let pidForPortCalls = 0
-  const { deps } = fakeDeps({
-    // First probe matches the recorded PID; after the (lagging) kill, the
-    // port no longer answers on it — that is the real "stopped" signal.
-    pidForPort: async () => {
-      pidForPortCalls += 1
-      return pidForPortCalls === 1 ? 4242 : null
-    },
-    killPidTree: async () => false, // the pid-watcher lags, but the kill worked
-  })
-  const rt = new plugin.WebUiRuntime({ ...baseOptions(), adoptedPidFile: pidFile }, deps)
-
-  const result = await rt.stop()
-  // killPidTree reported false, but the port no longer answers on the
-  // recorded PID — the port is the real signal, so the stop is a success.
-  assert.match(result.message, /stopped the Web UI server started by the launcher/)
-})
-
-test('runtime: an adopted stop stays "still running" when the port still has the recorded PID', async (t) => {
-  const plugin = await loadPlugin()
-  const root = mkdtempSync(join(tmpdir(), 'dsh-webui-pidfile-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
-  const pidFile = join(root, 'server.pid')
-  writeFileSync(pidFile, '4242\n')
-  const { deps } = fakeDeps({
-    pidForPort: async () => 4242, // the process is still listening
-    killPidTree: async () => false,
-  })
-  const rt = new plugin.WebUiRuntime({ ...baseOptions(), adoptedPidFile: pidFile }, deps)
-
-  const result = await rt.stop()
-  assert.match(result.message, /still running after kill attempts/)
-})
-
-test('runtime: status exposes stoppable for a launcher-recorded adopted server', async (t) => {
-  const plugin = await loadPlugin()
-  const root = mkdtempSync(join(tmpdir(), 'dsh-webui-pidfile-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
-  const pidFile = join(root, 'server.pid')
-  writeFileSync(pidFile, '4242\n')
+  writeFileSync(pidFile, `${process.pid}\n`)
   const { deps } = fakeDeps({
     probeListening: async () => true,
-    pidForPort: async () => 4242,
+    pidForPort: async () => process.pid,
   })
   const rt = new plugin.WebUiRuntime({ ...baseOptions(), adoptedPidFile: pidFile }, deps)
 
@@ -245,11 +221,29 @@ test('runtime: status exposes stoppable for a launcher-recorded adopted server',
   assert.equal(status.stoppable, true)
 })
 
+test('runtime: status does not expose stoppable for another process record', async (t) => {
+  const plugin = await loadPlugin()
+  const root = mkdtempSync(join(tmpdir(), 'dsh-webui-pidfile-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const pidFile = join(root, 'server.pid')
+  writeFileSync(pidFile, '999999\n')
+  const { deps } = fakeDeps({
+    probeListening: async () => true,
+    pidForPort: async () => 999999,
+  })
+  const rt = new plugin.WebUiRuntime({ ...baseOptions(), adoptedPidFile: pidFile }, deps)
+
+  const status = await rt.status()
+
+  assert.equal(status.adopted, true)
+  assert.equal(status.stoppable, false)
+})
+
 test('runtime: status reports an adopted server without a PID record as not stoppable', async (t) => {
   const plugin = await loadPlugin()
   const { deps } = fakeDeps({
     probeListening: async () => true,
-    pidForPort: async () => 4242,
+    pidForPort: async () => process.pid,
   })
   const rt = new plugin.WebUiRuntime(baseOptions(), deps) // adoptedPidFile ''
 

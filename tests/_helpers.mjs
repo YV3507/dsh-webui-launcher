@@ -88,7 +88,7 @@ export function baseOptions() {
  * scenarios run without real waiting.
  */
 export function fakeDeps(overrides = {}) {
-  const calls = { spawns: 0, kills: 0, probes: 0, httpReady: 0, apiReady: 0, pidForPort: 0, pidKills: 0, records: 0 }
+  const calls = { spawns: 0, kills: 0, probes: 0, httpReady: 0, apiReady: 0, pidForPort: 0, scheduledKills: 0, records: 0 }
   const clock = { t: 0 }
   let code = null
   const server = {
@@ -124,9 +124,8 @@ export function fakeDeps(overrides = {}) {
       calls.pidForPort += 1
       return null
     },
-    killPidTree: async () => {
-      calls.pidKills += 1
-      return true
+    scheduleKill: () => {
+      calls.scheduledKills += 1
     },
     recordSpawnedPid: () => {
       calls.records += 1
