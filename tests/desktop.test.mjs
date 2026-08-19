@@ -46,6 +46,12 @@ test('launcher script: Windows .cmd polls until ready with the correct polarity'
   // Already serving? Skip the spawn and open the browser directly.
   assert.match(cmd, /if not errorlevel 1 goto open/)
   assert.match(cmd, /if errorlevel 1 \( timeout \/t 1 \/nobreak >nul & goto loop \)/)
+  // The server is launched through a VBScript with a hidden console, so no
+  // Node.js terminal stays on the desktop/taskbar while the server runs.
+  assert.match(cmd, /wscript\.exe "/)
+  const vbs = readFileSync(join(root, 'launch-server.vbs'), 'utf8')
+  assert.match(vbs, /sh\.CurrentDirectory = "/)
+  assert.match(vbs, /sh\.Run ".*", 0, False/)
   // The browser line follows the loop, not the other way around.
   const loopIndex = cmd.indexOf('goto loop')
   const openIndex = cmd.indexOf('start ""')
